@@ -31,21 +31,20 @@ int llOpenTx(LinkLayer llParameters)
     printf("Serial port %s opened\n", llParameters.serialPort);
 
     // Create string to send
-    unsigned char buf[BUF_SIZE] = {0};
+    unsigned char setFrame[5];
 
-    buf[0] = 0x7E;
-    buf[1] = 0x03;
-    buf[2] = 0x03;
-    buf[3] = 0x00;
-    buf[4] = 0x7E;
-    buf[5] = 'z';
+    setFrame[0] = 0x7E;
+    setFrame[1] = 0x03;
+    setFrame[2] = 0x03;
+    setFrame[3] = setFrame[1] ^ setFrame[2]; //xor?
+    setFrame[4] = 0x7E;
 
     // In non-canonical mode, '\n' does not end the writing.
     // Test this condition by placing a '\n' in the middle of the buffer.
     // The whole buffer must be sent even with the '\n'.
     
 
-    int bytes = writeBytesSerialPort(buf, BUF_SIZE);
+    int bytes = writeBytesSerialPort(setFrame, 5); //mudar para 5
     printf("%d bytes written to serial port\n", bytes);
 
     // Wait until all bytes have been written to the serial port
