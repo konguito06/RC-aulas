@@ -81,21 +81,12 @@ int llOpenRx(LinkLayer llParameters)
 
     printf("Serial port %s opened\n", llParameters.serialPort);
 
-    // Read from serial port until the 'z' char is received.
+    // Read the five bytes of the SET supervision frame.
+    unsigned char setFrame[5];
+    int frameBytes = 0;
 
-    // NOTE: This while() cycle is a simple example showing how to read from the serial port.
-    // It must be changed in order to respect the specifications of the protocol indicated in the Lab guide.
-
-    // TODO: Save the received bytes in a buffer array and print it at the end of the program.
-    volatile int STOP = FALSE;
-    int nBytesBuf = 0;
-    int flagCount = 0;
-
-    while (STOP == FALSE)
+    while (frameBytes < 5)
     {
-        // Read one byte from serial port.
-        // NOTE: You must check how many bytes were actually read by reading the return value.
-        // In this example, we assume that the byte is always read, which may not be true.
         unsigned char byte;
         int bytes = readByteSerialPort(&byte);
         if (bytes < 0)
@@ -107,22 +98,42 @@ int llOpenRx(LinkLayer llParameters)
 
         if (bytes == 1)
         {
-            nBytesBuf++;
             printf("Byte received: %02X\n", byte);
-
-            if (byte == 0x7E)
-            {
-                flagCount++;
-
-                if (flagCount == 2)
-                {
-                    STOP = TRUE;
-                }
-            }
+            setFrame[frameBytes] = byte;
+            frameBytes++;
         }
     }
 
-    printf("Total bytes received: %d\n", nBytesBuf);
+    // Validate the SET frame before replying with UA.
+    if (setFrame[0] != 0x7E ||
+        setFrame[1] != 0x03 ||
+        setFrame[2] != 0x03 ||
+        setFrame[3] != (unsigned char)(setFrame[1] ^ setFrame[2]) ||
+        setFrame[4] != 0x7E)
+    {
+        fprintf(stderr, "Invalid SET frame received\n");
+        closeSerialPort();
+        return -1;
+    }
+
+    // Send UA: FLAG | A | UA | BCC1 | FLAG.
+    unsigned char uaFrame[5];
+
+    uaFrame[0] = 0x7E;
+    uaFrame[1] = 0x03;
+    uaFrame[2] = 0x07;
+    uaFrame[3] = setFrame[1] ^ setFrame[2]; //xor
+    uaFrame[4] = 0x7E;
+
+    int bytesWritten = writeBytesSerialPort(uaFrame, 5);
+    if (bytesWritten != 5)
+    {
+        fprintf(stderr, "Could not write the complete UA frame (%d/5 bytes)\n", bytesWritten);
+        closeSerialPort();
+        return -1;
+    }
+
+    printf("UA frame sent: 7E 03 07 04 7E\n");
 
     // Close serial port
     if (closeSerialPort() < 0)
