@@ -47,6 +47,10 @@ int llOpenTx(LinkLayer llParameters)
     int bytes = writeBytesSerialPort(setFrame, 5); //mudar para 5
     printf("%d bytes written to serial port\n", bytes);
 
+    for (int i = 0; i < 5; i++){
+        printf("byte: %02X\n", setFrame[i]);
+    }
+
     // Wait until all bytes have been written to the serial port
     sleep(1);
 
@@ -97,10 +101,14 @@ int llOpenRx(LinkLayer llParameters)
 
         printf("Byte received: %c\n", byte);
 
-        if (byte == 'z')
-        {
-            printf("Received 'z' char. Stop reading from serial port.\n");
+        int flagCount = 0;
+
+        if (bytes == 1 && byte == 0x7E) {
+            flagCount++;
+
+            if (flagCount == 2) {
             STOP = TRUE;
+            }
         }
     }
 
