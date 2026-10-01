@@ -122,7 +122,7 @@ int llOpenRx(LinkLayer llParameters)
     uaFrame[0] = 0x7E;
     uaFrame[1] = 0x03;
     uaFrame[2] = 0x07;
-    uaFrame[3] = setFrame[1] ^ setFrame[2]; //xor
+    uaFrame[3] = uaFrame[1] ^ uaFrame[2]; //xor
     uaFrame[4] = 0x7E;
 
     int bytesWritten = writeBytesSerialPort(uaFrame, 5);
