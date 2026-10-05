@@ -42,7 +42,6 @@ int llOpenTx(LinkLayer llParameters)
     // In non-canonical mode, '\n' does not end the writing.
     // Test this condition by placing a '\n' in the middle of the buffer.
     // The whole buffer must be sent even with the '\n'.
-    
 
     int bytes = writeBytesSerialPort(setFrame, 5); //mudar para 5
     printf("%d bytes written to serial port\n", bytes);
