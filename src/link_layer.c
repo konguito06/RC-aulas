@@ -39,6 +39,54 @@ void alarmHandler(int signal) {
     printf("Alarm #%d recieved\n", alarmCount);
 }
 
+// State Machine
+
+static void updateState(State *state, unsigned char byte,
+                        unsigned char expectedA, unsigned char expectedC)
+{
+    switch (*state)
+    {
+    case START:
+        if (byte == FLAG)
+            *state = FLAG_RCV;
+        break;
+
+    case FLAG_RCV:
+        if (byte == expectedA)
+            *state = A_RCV;
+        else if (byte != FLAG)
+            *state = START;
+        break;
+    
+    case A_RCV:
+        if (byte == expectedC)
+            *state = C_RCV;
+        else if (byte == FLAG)
+            *state = FLAG_RCV;
+        else
+            *state = START;
+        break;
+
+    case C_RCV:
+        if (byte == (expectedA ^ expectedC))
+            *state = BCC_OK;
+        else if (byte == FLAG)
+            *state = FLAG_RCV;
+        else
+            *state = START;
+        break;
+
+    case BCC_OK:
+        if (byte == FLAG)
+            *state = STOP;
+        else
+            *state = START;
+        break;
+
+    case STOP:
+        break;
+    }    
+}
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
@@ -80,7 +128,7 @@ int llOpenTx(LinkLayer llParameters)
     alarmEnabled = 0;
     int uaReceived = 0;
 
-while (alarmCount <= llParameters.nRetransmissions && !uaReceived)
+    while (alarmCount <= llParameters.nRetransmissions && !uaReceived)
     {
         printf("A enviar SET - tentativa %d\n", alarmCount + 1);
 
@@ -90,81 +138,39 @@ while (alarmCount <= llParameters.nRetransmissions && !uaReceived)
         alarm(llParameters.timeout);
 
         State state = START;
-    unsigned char byte;
+        unsigned char byte;
 
-    while (state != STOP && alarmEnabled)
-    {
-        int res = readByteSerialPort(&byte);
-
-        if (res < 0 && alarmEnabled)
+        while (state != STOP && alarmEnabled)
         {
-            return -1;
-        }
+            int res = readByteSerialPort(&byte);
 
-        if (res == 0)
-        {
-            continue;
-        }
+            if (res < 0 && alarmEnabled)
+            {
+                return -1;
+            }
 
-        if (res > 0)
-        {
+            if (res <= 0)
+            {
+                continue;
+            }
+            
             printf("Byte received: 0x%02X\n", byte);
 
-            switch (state)
-            {
-                case START:
-                    if (byte == FLAG)
-                        state = FLAG_RCV;
-                    break;
-
-                case FLAG_RCV:
-                    if (byte == A_TX)
-                        state = A_RCV;
-                    else if (byte != FLAG)
-                        state = START;
-                    break;
-
-                case A_RCV:
-                    if (byte == C_UA)
-                        state = C_RCV;
-                    else if (byte == FLAG)
-                        state = FLAG_RCV;
-                    else
-                        state = START;
-                    break;
-
-                case C_RCV:
-                    if (byte == (A_TX ^ C_UA))
-                        state = BCC_OK;
-                    else if (byte == FLAG)
-                        state = FLAG_RCV;
-                    else
-                        state = START;
-                    break;
-
-                case BCC_OK:
-                    if (byte == FLAG)
-                        state = STOP;
-                    else
-                        state = START;
-                    break;
-
-                case STOP:
-                    break;
-            }
-            }
-           }
-           if (state == STOP)
-            {
-                alarm(0);
-                alarmEnabled = 0;
-                uaReceived = 1;
-
-                printf("UA recebido corretamente\n");
-            }
+            updateState(&state, byte, A_TX, C_UA);
+                
         }
+
+        if (state == STOP)
+        {
+            alarm(0);
+            alarmEnabled = 0;
+            uaReceived = 1;
+
+            printf("UA recebido corretamente\n");
+        }
+    }
        
-        if (!uaReceived)
+    if (!uaReceived)
     {
         printf("Falha ao estabelecer ligação\n");
         return -1;
@@ -216,64 +222,22 @@ int llOpenRx(LinkLayer llParameters)
 
         printf("Byte received: 0x%02X\n", byte);
 
-        switch (state)
-        {
-            case START:
-                if (byte == FLAG)
-                    state = FLAG_RCV;
-                break;
-
-            case FLAG_RCV:
-                if (byte == A_TX)
-                    state = A_RCV;
-                else if (byte != FLAG)
-                    state = START;
-                break;
-
-            case A_RCV:
-                if (byte == C_SET)
-                    state = C_RCV;
-                else if (byte == FLAG)
-                    state = FLAG_RCV;
-                else
-                    state = START;
-                break;
-
-            case C_RCV:
-                if (byte == (A_TX ^ C_SET))
-                    state = BCC_OK;
-                else if (byte == FLAG)
-                    state = FLAG_RCV;
-                else
-                    state = START;
-                break;
-
-            case BCC_OK:
-                if (byte == FLAG)
-                    state = STOP;
-                else
-                    state = START;
-                break;
-
-            case STOP:
-                break;
-        }
+        updateState(&state, byte, A_TX, C_SET);
     }
-        printf("SET recebido corretamente\n");
+        
+    printf("SET recebido corretamente\n");
    
-        unsigned char uaFrame[5];
+    unsigned char uaFrame[5];
 
-        uaFrame[0] = FLAG;
-        uaFrame[1] = A_TX;
-        uaFrame[2] = C_UA;
-        uaFrame[3] = A_TX ^ C_UA;
-        uaFrame[4] = FLAG;
+    uaFrame[0] = FLAG;
+    uaFrame[1] = A_TX;
+    uaFrame[2] = C_UA;
+    uaFrame[3] = A_TX ^ C_UA;
+    uaFrame[4] = FLAG;
 
-        writeBytesSerialPort(uaFrame, 5);
+    writeBytesSerialPort(uaFrame, 5);
 
-        printf("UA enviado\n");
-    
-
+    printf("UA enviado\n");
 
     // Close serial port
     if (closeSerialPort() < 0)
