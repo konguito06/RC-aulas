@@ -100,6 +100,7 @@ int llOpenTx(LinkLayer llParameters)
     if (openSerialPort(llParameters.serialPort, llParameters.baudRate) < 0)
     {
         perror("openSerialPort");
+        alarm(0);
         return -1;
     }
 
@@ -109,6 +110,8 @@ int llOpenTx(LinkLayer llParameters)
     if (sigaction(SIGALRM, &act, NULL) == -1)
     {
         perror("sigaction");
+        alarm(0);
+        closeSerialPort();
         return -1;
     };
     
@@ -146,6 +149,8 @@ int llOpenTx(LinkLayer llParameters)
 
             if (res < 0 && alarmEnabled)
             {
+                alarm(0);
+                closeSerialPort();
                 return -1;
             }
 
@@ -173,18 +178,12 @@ int llOpenTx(LinkLayer llParameters)
     if (!uaReceived)
     {
         printf("Falha ao estabelecer ligação\n");
+        alarm(0);
+        closeSerialPort();
         return -1;
     }
 
-    // Close serial port
-    if (closeSerialPort() < 0)
-    {
-        perror("closeSerialPort");
-        return -1;
-    }
-
-    printf("Serial port %s closed\n", llParameters.serialPort);
-
+    alarm(0);
     return 0;
 }
 
@@ -212,6 +211,7 @@ int llOpenRx(LinkLayer llParameters)
 
         if (res < 0)
         {
+            closeSerialPort();
             return -1;
         }
 
@@ -238,15 +238,6 @@ int llOpenRx(LinkLayer llParameters)
     writeBytesSerialPort(uaFrame, 5);
 
     printf("UA enviado\n");
-
-    // Close serial port
-    if (closeSerialPort() < 0)
-    {
-        perror("closeSerialPort");
-        return -1;
-    }
-
-    printf("Serial port %s closed\n", llParameters.serialPort);
 
     return 0;
 }
