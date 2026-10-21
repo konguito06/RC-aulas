@@ -291,6 +291,8 @@ int llSend(const unsigned char *buf, int bufSize)
         return -1;
     }
 
+    //--------------------Frame Building-------------//
+
     int frameSize = 0;
 
     unsigned char c = Ns ? C_I1 : C_I0;
@@ -308,6 +310,10 @@ int llSend(const unsigned char *buf, int bufSize)
 
     frameSize += stuffByte(bcc2, &frame[frameSize]);   // BCC2 tbm fica stuffed
     frame[frameSize++] = FLAG;
+
+    //----------------sending and waiting for RR/REJ------------------//
+
+    
 
     free(frame);
     return bufSize; 
