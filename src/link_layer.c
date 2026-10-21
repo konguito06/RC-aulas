@@ -32,6 +32,8 @@
 
 static int Ns = 0;
 
+
+
 typedef enum { 
     START,
     FLAG_RCV,
@@ -259,9 +261,21 @@ int llOpenRx(LinkLayer llParameters)
 ////////////////////////////////////////////////
 int llSend(const unsigned char *buf, int bufSize)
 {
-    // TODO: Implement this function
+    int maxSize = 2*(bufSize + 1) + 5;
+    unsigned char *frame = malloc(maxSize);
 
-    return 0;
+    if (frame == NULL)
+    {
+        perror("malloc");
+        return -1;
+    }
+
+    int frameSize = 0;
+
+    
+
+    free(frame);
+    return bufSize; 
 }
 
 ////////////////////////////////////////////////
