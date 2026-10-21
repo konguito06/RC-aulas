@@ -302,9 +302,12 @@ int llSend(const unsigned char *buf, int bufSize)
 
     unsigned char bcc2 = 0;
     for (int i = 0; i < bufSize; i++){
-        bcc2 ^= buf[i];
-        frameSize += stuffByte
+        bcc2 ^= buf[i];      //Xor do byte
+        frameSize += stuffByte(buf[i], &frame[frameSize]); //stuffa todos os bytes
     }
+
+    frameSize += stuffByte(bcc2, &frame[frameSize]);   // BCC2 tbm fica stuffed
+    frame[frameSize++] = FLAG;
 
     free(frame);
     return bufSize; 
