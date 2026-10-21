@@ -101,6 +101,27 @@ static void updateState(State *state, unsigned char byte,
         break;
     }    
 }
+
+//-----------Byte Stuffer----------//
+
+static int stuffByte(unsigned char b, unsigned char *out)
+{
+    if (b == FLAG)
+    {
+        out[0] = ESC;
+        out[1] = 0x5E;
+        return 2;
+    }
+    if (b == ESC)
+    {
+        out[0] = ESC;
+        out[1] = 0x5D;
+        return 2;
+    }
+    out[0] = b;
+    return 1;
+}
+
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
