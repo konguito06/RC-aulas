@@ -272,7 +272,18 @@ int llSend(const unsigned char *buf, int bufSize)
 
     int frameSize = 0;
 
-    
+    unsigned char c = Ns ? C_I1 : C_I0;
+
+    frame[frameSize++] = FLAG;
+    frame[frameSize++] = A_TX;
+    frame[frameSize++] = c;
+    frame[frameSize++] = A_TX ^ c; // BCC1
+
+    unsigned char bcc2 = 0;
+    for (int i = 0; i < bufSize; i++){
+        bcc2 ^= buf[i];
+        frameSize += stuffByte
+    }
 
     free(frame);
     return bufSize; 
