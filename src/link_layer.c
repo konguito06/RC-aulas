@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <unistd.h>
 
-// MISC
+//------------------------------------------MISC------------------------------------------//
 #define _POSIX_SOURCE 1 // POSIX compliant source
 #define BUF_SIZE 256
 
@@ -19,6 +19,18 @@
 
 #define C_SET 0X03
 #define C_UA 0x07
+
+//------------------------------------------LLSEND------------------------------------------//
+
+#define ESC 0x7D
+#define C_I0 0x00
+#define C_I1 0x80
+#define C_RR0 0xAA
+#define C_RR1 0xAB
+#define C_REJ0 0x54
+#define C_REJ1 0x55
+
+static int Ns = 0;
 
 typedef enum { 
     START,
