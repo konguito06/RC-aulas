@@ -313,7 +313,47 @@ int llSend(const unsigned char *buf, int bufSize)
 
     //----------------sending and waiting for RR/REJ------------------//
 
-    
+    int result = -1;
+    int accepted = 0;
+    alarmCount = 0;
+
+    while((alarmCount <= savedRetransmissions) && !accepted){
+        writeBytesSerialPort(frame, frameSize);
+
+        alarmEnabled = 1;
+        alarm(savedTimeout);
+
+        State rrState = START, rejState = START;
+        unsigned char rr  = Ns ? C_RR0 : C_RR1;    // RR(!Ns)
+        unsigned char rej = Ns ? C_REJ1 : C_REJ0;  // REJ(Ns)
+        unsigned char byte;
+
+        while (rrState != STOP && rejState != STOP && alarmEnabled)
+        {
+            int res = readByteSerialPort(&byte);
+            if (res <= 0) continue;
+
+            updateState(&rrState,  byte, A_TX, rr);
+            updateState(&rejState, byte, A_TX, rej);
+        }
+
+        if (rrState == STOP)
+        {
+            alarm(0);
+            alarmEnabled = 0;
+            Ns = !Ns;
+            result = bufSize;
+            accepted = 1;
+        }
+
+        else if (rejState == STOP)
+        {
+            alarm(0);
+            alarmEnabled = 0;
+            alarmCount++;       // REJ counts as a retry, loop retransmits
+        }
+        // else: timeout. The alarm handler already did alarmCount++
+    }
 
     free(frame);
     return bufSize; 
