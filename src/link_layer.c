@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <unistd.h>
 
+#include <stdlib.h>
 //------------------------------------------MISC------------------------------------------//
 #define _POSIX_SOURCE 1 // POSIX compliant source
 #define BUF_SIZE 256
@@ -31,8 +32,8 @@
 #define C_REJ1 0x55
 
 static int Ns = 0;
-
-
+static int savedTimeout = 0;
+static int savedRetransmissions = 0;
 
 typedef enum { 
     START,
@@ -122,6 +123,17 @@ static int stuffByte(unsigned char b, unsigned char *out)
     return 1;
 }
 
+//---------------------------------supervision frame sender------------------------------------------//
+
+static int expectedNs = 0;   // Ns the receiver expects next
+
+static void sendSupervisionFrame(unsigned char a, unsigned char c)
+    {
+        unsigned char f[5] = {FLAG, a, c, a ^ c, FLAG};
+        writeBytesSerialPort(f, 5);
+    }
+    
+
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
@@ -138,6 +150,9 @@ int llOpenTx(LinkLayer llParameters)
         alarm(0);
         return -1;
     }
+
+    savedTimeout = llParameters.timeout;
+    savedRetransmissions = llParameters.nRetransmissions;
 
     struct sigaction act = {0};
     act.sa_handler = &alarmHandler;
@@ -356,7 +371,7 @@ int llSend(const unsigned char *buf, int bufSize)
     }
 
     free(frame);
-    return bufSize; 
+    return result;
 }
 
 ////////////////////////////////////////////////
@@ -364,8 +379,6 @@ int llSend(const unsigned char *buf, int bufSize)
 ////////////////////////////////////////////////
 int llReceive(unsigned char *packet)
 {
-    // TODO: Implement this function
-
     return 0;
 }
 
