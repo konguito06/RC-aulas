@@ -422,6 +422,26 @@ int llReceive(unsigned char *packet)
                 else if (byte == FLAG) state = I_FLAG;
                 else state = I_START;
                 break;
+            
+            case I_DATA:
+                if (escape)
+                {
+                    packet[i++] = byte ^ 0x20;   // desfazer stuffing
+                    escape = 0;
+                }
+                else if (byte == ESC)
+                {
+                    escape = 1;                  // proximo byte e o stuffed 
+                }
+                else if (byte == FLAG)
+                {
+                    //Vai aqui o step4
+                }
+                else
+                {
+                    packet[i++] = byte;
+                }
+                break;
         }
     }
 }
