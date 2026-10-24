@@ -394,6 +394,17 @@ int llReceive(unsigned char *packet)
     int i = 0;          // how many bytes are in packet so far
     int escape = 0;     // 1 = previous byte was 0x7D
     return 0;
+
+    while(1){
+        
+        int res = readByteSerialPort(&byte);
+        if (res < 0) return -1;
+        if (res == 0) continue;
+
+        switch(state){
+            
+        }
+    }
 }
 
 ////////////////////////////////////////////////
