@@ -377,8 +377,19 @@ int llSend(const unsigned char *buf, int bufSize)
 ////////////////////////////////////////////////
 // LLRECEIVE
 ////////////////////////////////////////////////
+
+typedef enum {
+    I_START,   // waiting for the opening FLAG
+    I_FLAG,    // got FLAG, expecting address
+    I_A,       // got address, expecting control (I0 or I1)
+    I_C,       // got control, expecting BCC1
+    I_DATA     // header is valid, collecting data until the closing FLAG
+} IState;
+
+
 int llReceive(unsigned char *packet)
-{
+{   
+    
     return 0;
 }
 
