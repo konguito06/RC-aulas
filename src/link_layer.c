@@ -1,29 +1,28 @@
 // RCOM 2026/2027
-//
 // Link layer protocol implementation
+
+#define _POSIX_SOURCE 1 // POSIX compliant source
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <signal.h>
+#include <unistd.h>
 
 #include "link_layer.h"
 #include "serial_port.h"
 
-#include <signal.h>
-
-#include <stdio.h>
-#include <unistd.h>
-
-#include <stdlib.h>
-//------------------------------------------MISC------------------------------------------//
-#define _POSIX_SOURCE 1 // POSIX compliant source
-#define BUF_SIZE 256
+//------------------------------- PROTOCOL CONSTANTS -------------------------------------//
 
 #define FLAG 0x7E
+#define ESC 0x7D
+
 #define A_TX 0x03
+#define A_RX 0x01
 
 #define C_SET 0X03
 #define C_UA 0x07
+#define C_DISC 0X0B
 
-//------------------------------------------LLSEND------------------------------------------//
-
-#define ESC 0x7D
 #define C_I0 0x00
 #define C_I1 0x80
 #define C_RR0 0xAA
@@ -31,14 +30,17 @@
 #define C_REJ0 0x54
 #define C_REJ1 0x55
 
-//------------------------------------------LLCLOSE-----------------------------------------//
-
-#define A_RX 0x01
-#define C_DISC 0X0B
+//------------------------------------ GLOBAL STATE ---------------------------------------//
 
 static int Ns = 0;
+static int expectedNs = 0; // Ns the receiver expects next
 static int savedTimeout = 0;
 static int savedRetransmissions = 0;
+
+int alarmEnabled = 0;
+int alarmCount = 0;
+
+//-------------------------------------- TYPES --------------------------------------------//
 
 typedef enum { 
     START,
@@ -49,8 +51,15 @@ typedef enum {
     STOP
 } State;
 
-int alarmEnabled = 0;
-int alarmCount = 0;
+typedef enum {
+    I_START,   // waiting for the opening FLAG
+    I_FLAG,    // got FLAG, expecting address
+    I_A,       // got address, expecting control (I0 or I1)
+    I_C,       // got control, expecting BCC1
+    I_DATA     // header is valid, collecting data until the closing FLAG
+} IState;
+
+//--------------------------------- SHARED HELPERS ----------------------------------------//
 
 void alarmHandler(int signal) {
     alarmEnabled = 0;
@@ -58,8 +67,6 @@ void alarmHandler(int signal) {
 
     printf("Alarm #%d recieved\n", alarmCount);
 }
-
-// State Machine
 
 static void updateState(State *state, unsigned char byte,
                         unsigned char expectedA, unsigned char expectedC)
@@ -108,30 +115,6 @@ static void updateState(State *state, unsigned char byte,
     }    
 }
 
-//-----------Byte Stuffer----------//
-
-static int stuffByte(unsigned char b, unsigned char *out)
-{
-    if (b == FLAG)
-    {
-        out[0] = ESC;
-        out[1] = 0x5E;
-        return 2;
-    }
-    if (b == ESC)
-    {
-        out[0] = ESC;
-        out[1] = 0x5D;
-        return 2;
-    }
-    out[0] = b;
-    return 1;
-}
-
-//---------------------------------supervision frame sender------------------------------------------//
-
-static int expectedNs = 0;   // Ns the receiver expects next
-
 static int writeFrame(const unsigned char *frame, int frameSize)
 {
     int written = 0;
@@ -150,18 +133,11 @@ static int sendSupervisionFrame(unsigned char a, unsigned char c)
     unsigned char f[5] = {FLAG, a, c, a ^ c, FLAG};
     return writeFrame(f, 5);
 }
-    
 
-////////////////////////////////////////////////
-// LLOPEN
-////////////////////////////////////////////////
+//------------------------------------ LINK OPEN ------------------------------------------//
+
 int llOpenTx(LinkLayer llParameters)
 {
-    // ----------------------------------------------------
-    // This example code shows how to open the serial port and send a string.
-    // TODO: Adapt and extend this code according to the specifications of the project.
-    // ----------------------------------------------------
-
     if (openSerialPort(llParameters.serialPort, llParameters.baudRate) < 0)
     {
         perror("openSerialPort");
@@ -262,11 +238,6 @@ int llOpenTx(LinkLayer llParameters)
 
 int llOpenRx(LinkLayer llParameters)
 {
-    // ----------------------------------------------------
-    // This example code shows how to open the serial port and receive a string.
-    // TODO: Adapt and extend this code according to the specifications of the project.
-    // ----------------------------------------------------
-
     if (openSerialPort(llParameters.serialPort, llParameters.baudRate) < 0)
     {
         perror("openSerialPort");
@@ -319,9 +290,27 @@ int llOpenRx(LinkLayer llParameters)
     return 0;
 }
 
-////////////////////////////////////////////////
-// LLSEND
-////////////////////////////////////////////////
+//------------------------------------ LINK SEND ------------------------------------------//
+
+static int stuffByte(unsigned char b, unsigned char *out)
+{
+    if (b == FLAG)
+    {
+        out[0] = ESC;
+        out[1] = 0x5E;
+        return 2;
+    }
+    if (b == ESC)
+    {
+        out[0] = ESC;
+        out[1] = 0x5D;
+        return 2;
+    }
+    out[0] = b;
+    return 1;
+}
+
+// Build an information frame and wait for its RR/REJ response.
 int llSend(const unsigned char *buf, int bufSize)
 {
     int maxSize = 2*(bufSize + 1) + 5;
@@ -333,7 +322,7 @@ int llSend(const unsigned char *buf, int bufSize)
         return -1;
     }
 
-    //--------------------Frame Building-------------//
+    //-------------------- Build the information frame --------------------//
 
     int frameSize = 0;
 
@@ -353,7 +342,7 @@ int llSend(const unsigned char *buf, int bufSize)
     frameSize += stuffByte(bcc2, &frame[frameSize]);   // BCC2 tbm fica stuffed
     frame[frameSize++] = FLAG;
 
-    //----------------sending and waiting for RR/REJ------------------//
+    //-------------------- Send and wait for RR/REJ -----------------------//
 
     int result = -1;
     int accepted = 0;
@@ -412,18 +401,7 @@ int llSend(const unsigned char *buf, int bufSize)
     return result;
 }
 
-////////////////////////////////////////////////
-// LLRECEIVE
-////////////////////////////////////////////////
-
-typedef enum {
-    I_START,   // waiting for the opening FLAG
-    I_FLAG,    // got FLAG, expecting address
-    I_A,       // got address, expecting control (I0 or I1)
-    I_C,       // got control, expecting BCC1
-    I_DATA     // header is valid, collecting data until the closing FLAG
-} IState;
-
+//----------------------------------- LINK RECEIVE ----------------------------------------//
 
 int llReceive(unsigned char *packet)
 {   
@@ -536,9 +514,8 @@ int llReceive(unsigned char *packet)
     }
 }
 
-////////////////////////////////////////////////
-// LLCLOSE
-////////////////////////////////////////////////
+//------------------------------------ LINK CLOSE -----------------------------------------//
+
 int llCloseTx()
 {
     alarmCount = 0;
