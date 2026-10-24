@@ -31,6 +31,11 @@
 #define C_REJ0 0x54
 #define C_REJ1 0x55
 
+//------------------------------------------LLCLOSE-----------------------------------------//
+
+#define A_RX 0x01
+#define C_DISC 0X0B
+
 static int Ns = 0;
 static int savedTimeout = 0;
 static int savedRetransmissions = 0;
@@ -492,13 +497,83 @@ int llReceive(unsigned char *packet)
 ////////////////////////////////////////////////
 int llCloseTx()
 {
-    
+    alarmCount = 0;
+    alarmEnabled = 0;
+    int discReceived = 0;
+
+    while ((alarmCount <= savedRetransmissions) && !discReceived)
+    {
+        sendSupervisionFrame(A_TX, C_DISC);
+
+        alarmEnabled = 1;
+        alarm(savedTimeout);
+
+        State state = START;
+        unsigned char = byte;
+
+        while (state != STOP && alarmEnabled)
+        {
+            int res = readByteSerialPort(&byte);
+            if (res <= 0) continue;
+
+            updateState(&state, byte, A_RX, C_DISC)
+        }
+
+        if (state == STOP)
+        {
+            alarm(0);
+            alarmEnabled = 0;
+            discReceived = 1;
+        }
+    }
+
+    if (!discReceived)
+    {
+        printf("Falha ao fechar ligação\n");
+        closeSerialPort();
+        return -1;
+    }
+
+    sendSupervisionFrame(A_TX, C_UA);
+
+    closeSerialPort();
     return 0;
 }
 
 int llCloseRx()
 {
-    // TODO: Implement this function
+    State state = START;
+    unsigned char = byte;
 
+    while (state != STOP)
+    {
+        int res = readByteSerialPort(&byte);
+        if (res < 0) { closeSerialPort(); return -1; }
+        if (res == 0) continue;
+
+        updateState(&state, byte, A_TX, C_DISC);
+    }
+
+    sendSupervisionFrame(A_RX, C_DISC);
+
+    State uaState = START, discState = START;
+
+    while (uaState != STOP)
+    {
+        int res = readByteSerialPort(&byte);
+        if (res < 0) { closeSerialPort(); return -1; }
+        if (res == 0) continue;
+
+        updateState(&uaState, byte, A_TX, C_UA);
+        updateState(&discState, byte, A_TX, C_DISC);
+
+        if (discState == STOP)
+        {
+            sendSupervisionFrame(A_RX, C_DISC);
+            discState = START;
+        }
+    }
+
+    closeSerialPort();
     return 0;
 }
