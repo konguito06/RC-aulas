@@ -451,37 +451,35 @@ int llReceive(unsigned char *packet)
                 }
                 else if (byte == FLAG)
                 {
-                    if (i < 1)
-                    {
-                        escape = 0;
-                        state = I_FLAG;
-                        break;
-                    }
-
+                    if (i < 1) { state = I_FLAG; break; }   // no room for BCC2
+                    int frameNs = (c == C_I1);
                     unsigned char bcc2 = 0;
-                    for (int k = 0; k < i - 1; k++) bcc2 ^= packet[k];
+                    
+                    for (int k = 0; k < i - 1; k++)
+                        bcc2 ^= packet[k];                  // XOR of the data only
+                    int bcc2Ok = (bcc2 == packet[i - 1]);   // last byte is BCC2
 
-                    int ns = (c == C_I1);
-                    unsigned char rr  = ns ? C_RR0  : C_RR1;
-                    unsigned char rej = ns ? C_REJ1 : C_REJ0;
-
-                    if (bcc2 == packet[i - 1])
+                    if (frameNs == expectedNs)
                     {
-                        sendSupervisionFrame(A_TX, rr);
-
-                        if (ns == expectedNs)
+                        if (bcc2Ok)
                         {
                             expectedNs = !expectedNs;
-                            return i - 1;
+                            sendSupervisionFrame(A_TX, expectedNs ? C_RR1 : C_RR0);
+                            return i - 1;                   // data length, without BCC2
+                        }
+                        else
+                        {
+                            sendSupervisionFrame(A_TX, expectedNs ? C_REJ1 : C_REJ0);
                         }
                     }
                     else
                     {
-                        if (ns == expectedNs) sendSupervisionFrame(A_TX, rej);
-                        else                  sendSupervisionFrame(A_TX, rr);
+                        // duplicate: we already have this frame, our RR got lost
+                        sendSupervisionFrame(A_TX, expectedNs ? C_RR1 : C_RR0);
                     }
 
-                    i = 0; escape = 0; state = I_START;
+                    state = I_START;   // frame handled, wait for the next one
+                    i = 0;
                 }
                 else
                 {
