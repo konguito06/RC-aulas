@@ -402,7 +402,26 @@ int llReceive(unsigned char *packet)
         if (res == 0) continue;
 
         switch(state){
-            
+            case I_START:
+                if (byte == FLAG) state = I_FLAG;
+                break;
+
+            case I_FLAG:
+                if (byte == A_TX) { a = byte; state = I_A; }
+                else if (byte != FLAG) state = I_START;
+                break;
+
+            case I_A:
+                if (byte == C_I0 || byte == C_I1) { c = byte; state = I_C; }
+                else if (byte == FLAG) state = I_FLAG;
+                else state = I_START;
+                break;
+
+            case I_C:
+                if (byte == (a ^ c)) { i = 0; escape = 0; state = I_DATA; }
+                else if (byte == FLAG) state = I_FLAG;
+                else state = I_START;
+                break;
         }
     }
 }
