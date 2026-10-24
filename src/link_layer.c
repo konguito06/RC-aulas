@@ -393,7 +393,6 @@ int llReceive(unsigned char *packet)
     unsigned char a = 0, c = 0, byte;
     int i = 0;          // how many bytes are in packet so far
     int escape = 0;     // 1 = previous byte was 0x7D
-    return 0;
 
     while(1){
         
@@ -424,8 +423,20 @@ int llReceive(unsigned char *packet)
                 break;
             
             case I_DATA:
+                if (i >= MAX_PAYLOAD_SIZE + 1)
+                {
+                    i = 0; escape = 0; state = I_START;
+                    break;
+                }
+
                 if (escape)
                 {
+                    if (byte == FLAG)
+                    {
+                        i = 0; escape = 0; state = I_FLAG;
+                        break;
+                    }
+                    
                     packet[i++] = byte ^ 0x20;   // desfazer stuffing
                     escape = 0;
                 }
@@ -435,7 +446,37 @@ int llReceive(unsigned char *packet)
                 }
                 else if (byte == FLAG)
                 {
-                    //Vai aqui o step4
+                    if (i < 1)
+                    {
+                        escape = 0;
+                        state = I_FLAG;
+                        break;
+                    }
+
+                    unsigned char bcc2 = 0;
+                    for (int k = 0; k < i - 1; k++) bcc2 ^= packet[k];
+
+                    int ns = (c == C_I1);
+                    unsigned char rr  = ns ? C_RR0  : C_RR1;
+                    unsigned char rej = ns ? C_REJ1 : C_REJ0;
+
+                    if (bcc2 == packet[i - 1])
+                    {
+                        sendSupervisionFrame(A_TX, rr);
+
+                        if (ns == expectedNs)
+                        {
+                            expectedNs = !expectedNs;
+                            return i - 1;
+                        }
+                    }
+                    else
+                    {
+                        if (ns == expectedNs) sendSupervisionFrame(A_TX, rej);
+                        else                  sendSupervisionFrame(A_TX, rr);
+                    }
+
+                    i = 0; escape = 0; state = I_START;
                 }
                 else
                 {
