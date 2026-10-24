@@ -377,7 +377,14 @@ int llSend(const unsigned char *buf, int bufSize)
         while (rrState != STOP && rejState != STOP && alarmEnabled)
         {
             int res = readByteSerialPort(&byte);
-            if (res <= 0) continue;
+            if (res < 0)
+            {
+                alarm(0);
+                alarmEnabled = 0;
+                free(frame);
+                return -1;
+            }
+            if (res == 0) continue;
 
             updateState(&rrState,  byte, A_TX, rr);
             updateState(&rejState, byte, A_TX, rej);
