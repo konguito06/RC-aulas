@@ -32,8 +32,8 @@
 
 //------------------------------------ GLOBAL STATE ---------------------------------------//
 
-static int Ns = 0;
-static int expectedNs = 0; // Ns the receiver expects next
+static int Ns = 0;         // bit number for the next frame we send
+static int expectedNs = 0; // bit number for the next frame we want
 static int savedTimeout = 0;
 static int savedRetransmissions = 0;
 
@@ -71,6 +71,7 @@ void alarmHandler(int signal) {
 static void updateState(State *state, unsigned char byte,
                         unsigned char expectedA, unsigned char expectedC)
 {
+    // Check each header byte in order, then wait for the closing flag.
     switch (*state)
     {
     case START:
@@ -117,6 +118,7 @@ static void updateState(State *state, unsigned char byte,
 
 static int writeFrame(const unsigned char *frame, int frameSize)
 {
+    // Keep writing until the whole frame is out.
     int written = 0;
     while (written < frameSize)
     {
@@ -130,6 +132,7 @@ static int writeFrame(const unsigned char *frame, int frameSize)
 
 static int sendSupervisionFrame(unsigned char a, unsigned char c)
 {
+    // Supervisory frames have no data, just the header and flags.
     unsigned char f[5] = {FLAG, a, c, a ^ c, FLAG};
     return writeFrame(f, 5);
 }
@@ -162,7 +165,7 @@ int llOpenTx(LinkLayer llParameters)
 
     printf("Serial port %s opened\n", llParameters.serialPort);
 
-    // Create string to send
+    // SET starts the connection; keep retrying until UA arrives.
     unsigned char setFrame[5];
 
     setFrame[0] = FLAG;
@@ -249,6 +252,7 @@ int llOpenRx(LinkLayer llParameters)
     State state = START;
     unsigned char byte;
 
+    // Wait for SET before replying with UA.
     while (state != STOP)
     {
         int res = readByteSerialPort(&byte);
@@ -294,6 +298,7 @@ int llOpenRx(LinkLayer llParameters)
 
 static int stuffByte(unsigned char b, unsigned char *out)
 {
+    // Escape FLAG and ESC so they can't look like frame boundaries.
     if (b == FLAG)
     {
         out[0] = ESC;
@@ -326,13 +331,14 @@ int llSend(const unsigned char *buf, int bufSize)
 
     int frameSize = 0;
 
-    unsigned char c = Ns ? C_I1 : C_I0;
+    unsigned char c = Ns ? C_I1 : C_I0; // mark this frame with its sequence bit
 
     frame[frameSize++] = FLAG;
     frame[frameSize++] = A_TX;
     frame[frameSize++] = c;
     frame[frameSize++] = A_TX ^ c; // BCC1
 
+    // BCC2 checks the payload; both it and the payload need stuffing.
     unsigned char bcc2 = 0;
     for (int i = 0; i < bufSize; i++){
         bcc2 ^= buf[i];      //Xor do byte
@@ -355,6 +361,7 @@ int llSend(const unsigned char *buf, int bufSize)
             return -1;
         }
 
+        // Retry if the timer expires or the receiver asks for a resend.
         alarmEnabled = 1;
         alarm(savedTimeout);
 
@@ -383,6 +390,7 @@ int llSend(const unsigned char *buf, int bufSize)
         {
             alarm(0);
             alarmEnabled = 0;
+            // The RR confirms the next sequence bit, so advance ours.
             Ns = !Ns;
             result = bufSize;
             accepted = 1;
@@ -411,8 +419,8 @@ int llReceive(unsigned char *packet)
     IState state = I_START;
     unsigned char a = 0, c = 0, byte;
     unsigned char frameData[MAX_PAYLOAD_SIZE + 1]; // payload plus BCC2
-    int i = 0;          // how many bytes are in packet so far
-    int escape = 0;     // 1 = previous byte was 0x7D
+    int i = 0;          // bytes collected so far
+    int escape = 0;     // previous byte was ESC
 
     while(1){
         
@@ -477,6 +485,7 @@ int llReceive(unsigned char *packet)
                     {
                         if (bcc2Ok)
                         {
+                            // Accept this frame and ask for the next sequence bit.
                             expectedNs = !expectedNs;
                             if (sendSupervisionFrame(A_TX, expectedNs ? C_RR1 : C_RR0) < 0)
                                 return -1;
@@ -486,13 +495,14 @@ int llReceive(unsigned char *packet)
                         }
                         else
                         {
+                            // Bad payload checksum: ask the sender to retry it.
                             if (sendSupervisionFrame(A_TX, expectedNs ? C_REJ1 : C_REJ0) < 0)
                                 return -1;
                         }
                     }
                     else
                     {
-                        // duplicate: we already have this frame, our RR got lost
+                        // It is a duplicate; resend RR in case the last one was lost.
                         if (sendSupervisionFrame(A_TX, expectedNs ? C_RR1 : C_RR0) < 0)
                             return -1;
                     }
@@ -524,6 +534,7 @@ int llCloseTx()
 
     while ((alarmCount <= savedRetransmissions) && !discReceived)
     {
+        // Start disconnect; wait for the receiver's DISC.
         if (sendSupervisionFrame(A_TX, C_DISC) < 0)
         {
             closeSerialPort();
@@ -559,6 +570,7 @@ int llCloseTx()
         return -1;
     }
 
+    // Finish the handshake with UA, then release the port.
     if (sendSupervisionFrame(A_TX, C_UA) < 0)
     {
         closeSerialPort();
@@ -574,6 +586,7 @@ int llCloseRx()
     State state = START;
     unsigned char byte;
 
+    // Wait for the sender to start closing the connection.
     while (state != STOP)
     {
         int res = readByteSerialPort(&byte);
