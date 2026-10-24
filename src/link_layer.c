@@ -132,11 +132,24 @@ static int stuffByte(unsigned char b, unsigned char *out)
 
 static int expectedNs = 0;   // Ns the receiver expects next
 
-static void sendSupervisionFrame(unsigned char a, unsigned char c)
+static int writeFrame(const unsigned char *frame, int frameSize)
+{
+    int written = 0;
+    while (written < frameSize)
     {
-        unsigned char f[5] = {FLAG, a, c, a ^ c, FLAG};
-        writeBytesSerialPort(f, 5);
+        int res = writeBytesSerialPort(frame + written, frameSize - written);
+        if (res <= 0)
+            return -1;
+        written += res;
     }
+    return 0;
+}
+
+static int sendSupervisionFrame(unsigned char a, unsigned char c)
+{
+    unsigned char f[5] = {FLAG, a, c, a ^ c, FLAG};
+    return writeFrame(f, 5);
+}
     
 
 ////////////////////////////////////////////////
@@ -190,7 +203,12 @@ int llOpenTx(LinkLayer llParameters)
     {
         printf("A enviar SET - tentativa %d\n", alarmCount + 1);
 
-        writeBytesSerialPort(setFrame, 5);
+        if (writeFrame(setFrame, 5) < 0)
+        {
+            alarm(0);
+            closeSerialPort();
+            return -1;
+        }
 
         alarmEnabled = 1;
         alarm(llParameters.timeout);
@@ -290,7 +308,11 @@ int llOpenRx(LinkLayer llParameters)
     uaFrame[3] = A_TX ^ C_UA;
     uaFrame[4] = FLAG;
 
-    writeBytesSerialPort(uaFrame, 5);
+    if (writeFrame(uaFrame, 5) < 0)
+    {
+        closeSerialPort();
+        return -1;
+    }
 
     printf("UA enviado\n");
 
@@ -338,7 +360,11 @@ int llSend(const unsigned char *buf, int bufSize)
     alarmCount = 0;
 
     while((alarmCount <= savedRetransmissions) && !accepted){
-        writeBytesSerialPort(frame, frameSize);
+        if (writeFrame(frame, frameSize) < 0)
+        {
+            free(frame);
+            return -1;
+        }
 
         alarmEnabled = 1;
         alarm(savedTimeout);
@@ -464,18 +490,21 @@ int llReceive(unsigned char *packet)
                         if (bcc2Ok)
                         {
                             expectedNs = !expectedNs;
-                            sendSupervisionFrame(A_TX, expectedNs ? C_RR1 : C_RR0);
+                            if (sendSupervisionFrame(A_TX, expectedNs ? C_RR1 : C_RR0) < 0)
+                                return -1;
                             return i - 1;                   // data length, without BCC2
                         }
                         else
                         {
-                            sendSupervisionFrame(A_TX, expectedNs ? C_REJ1 : C_REJ0);
+                            if (sendSupervisionFrame(A_TX, expectedNs ? C_REJ1 : C_REJ0) < 0)
+                                return -1;
                         }
                     }
                     else
                     {
                         // duplicate: we already have this frame, our RR got lost
-                        sendSupervisionFrame(A_TX, expectedNs ? C_RR1 : C_RR0);
+                        if (sendSupervisionFrame(A_TX, expectedNs ? C_RR1 : C_RR0) < 0)
+                            return -1;
                     }
 
                     state = I_START;   // frame handled, wait for the next one
@@ -501,20 +530,24 @@ int llCloseTx()
 
     while ((alarmCount <= savedRetransmissions) && !discReceived)
     {
-        sendSupervisionFrame(A_TX, C_DISC);
+        if (sendSupervisionFrame(A_TX, C_DISC) < 0)
+        {
+            closeSerialPort();
+            return -1;
+        }
 
         alarmEnabled = 1;
         alarm(savedTimeout);
 
         State state = START;
-        unsigned char = byte;
+        unsigned char byte;
 
         while (state != STOP && alarmEnabled)
         {
             int res = readByteSerialPort(&byte);
             if (res <= 0) continue;
 
-            updateState(&state, byte, A_RX, C_DISC)
+            updateState(&state, byte, A_RX, C_DISC);
         }
 
         if (state == STOP)
@@ -532,7 +565,11 @@ int llCloseTx()
         return -1;
     }
 
-    sendSupervisionFrame(A_TX, C_UA);
+    if (sendSupervisionFrame(A_TX, C_UA) < 0)
+    {
+        closeSerialPort();
+        return -1;
+    }
 
     closeSerialPort();
     return 0;
@@ -541,7 +578,7 @@ int llCloseTx()
 int llCloseRx()
 {
     State state = START;
-    unsigned char = byte;
+    unsigned char byte;
 
     while (state != STOP)
     {
@@ -552,7 +589,11 @@ int llCloseRx()
         updateState(&state, byte, A_TX, C_DISC);
     }
 
-    sendSupervisionFrame(A_RX, C_DISC);
+    if (sendSupervisionFrame(A_RX, C_DISC) < 0)
+    {
+        closeSerialPort();
+        return -1;
+    }
 
     State uaState = START, discState = START;
 
@@ -567,7 +608,11 @@ int llCloseRx()
 
         if (discState == STOP)
         {
-            sendSupervisionFrame(A_RX, C_DISC);
+            if (sendSupervisionFrame(A_RX, C_DISC) < 0)
+            {
+                closeSerialPort();
+                return -1;
+            }
             discState = START;
         }
     }
