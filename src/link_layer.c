@@ -427,8 +427,12 @@ typedef enum {
 
 int llReceive(unsigned char *packet)
 {   
+    if (packet == NULL)
+        return -1;
+
     IState state = I_START;
     unsigned char a = 0, c = 0, byte;
+    unsigned char frameData[MAX_PAYLOAD_SIZE + 1]; // payload plus BCC2
     int i = 0;          // how many bytes are in packet so far
     int escape = 0;     // 1 = previous byte was 0x7D
 
@@ -461,12 +465,6 @@ int llReceive(unsigned char *packet)
                 break;
             
             case I_DATA:
-                if (i >= MAX_PAYLOAD_SIZE + 1)
-                {
-                    i = 0; escape = 0; state = I_START;
-                    break;
-                }
-
                 if (escape)
                 {
                     if (byte == FLAG)
@@ -475,7 +473,12 @@ int llReceive(unsigned char *packet)
                         break;
                     }
 
-                    packet[i++] = byte ^ 0x20;   // desfazer stuffing
+                    if (i >= MAX_PAYLOAD_SIZE + 1)
+                    {
+                        i = 0; escape = 0; state = I_START;
+                        break;
+                    }
+                    frameData[i++] = byte ^ 0x20;   // desfazer stuffing
                     escape = 0;
                 }
                 else if (byte == ESC)
@@ -489,8 +492,8 @@ int llReceive(unsigned char *packet)
                     unsigned char bcc2 = 0;
                     
                     for (int k = 0; k < i - 1; k++)
-                        bcc2 ^= packet[k];                  // XOR of the data only
-                    int bcc2Ok = (bcc2 == packet[i - 1]);   // last byte is BCC2
+                        bcc2 ^= frameData[k];               // XOR of the data only
+                    int bcc2Ok = (bcc2 == frameData[i - 1]); // last byte is BCC2
 
                     if (frameNs == expectedNs)
                     {
@@ -499,6 +502,8 @@ int llReceive(unsigned char *packet)
                             expectedNs = !expectedNs;
                             if (sendSupervisionFrame(A_TX, expectedNs ? C_RR1 : C_RR0) < 0)
                                 return -1;
+                            for (int k = 0; k < i - 1; k++)
+                                packet[k] = frameData[k];
                             return i - 1;                   // data length, without BCC2
                         }
                         else
@@ -519,7 +524,12 @@ int llReceive(unsigned char *packet)
                 }
                 else
                 {
-                    packet[i++] = byte;
+                    if (i >= MAX_PAYLOAD_SIZE + 1)
+                    {
+                        i = 0; escape = 0; state = I_START;
+                        break;
+                    }
+                    frameData[i++] = byte;
                 }
                 break;
         }
