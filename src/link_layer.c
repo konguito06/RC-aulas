@@ -436,7 +436,7 @@ int llReceive(unsigned char *packet)
                         i = 0; escape = 0; state = I_FLAG;
                         break;
                     }
-                    
+
                     packet[i++] = byte ^ 0x20;   // desfazer stuffing
                     escape = 0;
                 }
@@ -492,8 +492,7 @@ int llReceive(unsigned char *packet)
 ////////////////////////////////////////////////
 int llCloseTx()
 {
-    // TODO: Implement this function
-
+    
     return 0;
 }
 
