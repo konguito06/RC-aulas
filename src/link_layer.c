@@ -389,7 +389,10 @@ typedef enum {
 
 int llReceive(unsigned char *packet)
 {   
-    
+    IState state = I_START;
+    unsigned char a = 0, c = 0, byte;
+    int i = 0;          // how many bytes are in packet so far
+    int escape = 0;     // 1 = previous byte was 0x7D
     return 0;
 }
 
