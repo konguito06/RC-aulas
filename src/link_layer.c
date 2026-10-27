@@ -618,6 +618,11 @@ int llCloseTx()
 int llCloseRx()
 {
     State state = START;
+    IState iState = I_START;
+    unsigned char iAddress = 0, iControl = 0;
+    unsigned char iData[MAX_PAYLOAD_SIZE + 1];
+    int iLength = 0;
+    int iEscape = 0;
     unsigned char byte;
 
     // Wait for the sender to start closing the connection.
@@ -646,6 +651,108 @@ int llCloseRx()
 
         updateState(&uaState, byte, A_RX, C_UA);
         updateState(&discState, byte, A_TX, C_DISC);
+
+        // llReceive has already delivered the final packet to the application.
+        // If its RR was lost, acknowledge the retransmitted duplicate here too.
+        switch (iState)
+        {
+        case I_START:
+            if (byte == FLAG) iState = I_FLAG;
+            break;
+
+        case I_FLAG:
+            if (byte == A_TX) { iAddress = byte; iState = I_A; }
+            else if (byte != FLAG) iState = I_START;
+            break;
+
+        case I_A:
+            if (iAddress == A_TX && (byte == C_I0 || byte == C_I1))
+            {
+                iControl = byte;
+                iState = I_C;
+            }
+            else if (byte == FLAG) iState = I_FLAG;
+            else iState = I_START;
+            break;
+
+        case I_C:
+            if (byte == (iAddress ^ iControl))
+            {
+                iLength = 0;
+                iEscape = 0;
+                iState = I_DATA;
+            }
+            else if (byte == FLAG) iState = I_FLAG;
+            else iState = I_START;
+            break;
+
+        case I_DATA:
+            if (iEscape)
+            {
+                if (byte == 0x5E || byte == 0x5D)
+                {
+                    if (iLength < MAX_PAYLOAD_SIZE + 1)
+                        iData[iLength++] = byte ^ 0x20;
+                    else
+                        iState = I_START;
+                }
+                else
+                {
+                    iState = (byte == FLAG) ? I_FLAG : I_START;
+                }
+                iEscape = 0;
+            }
+            else if (byte == ESC)
+            {
+                iEscape = 1;
+            }
+            else if (byte == FLAG)
+            {
+                if (iLength > 0)
+                {
+                    unsigned char bcc2 = 0;
+                    for (int i = 0; i < iLength - 1; i++)
+                        bcc2 ^= iData[i];
+
+                    int frameNs = (iControl == C_I1);
+                    int bcc2Ok = (bcc2 == iData[iLength - 1]);
+
+                    if (frameNs != expectedNs && bcc2Ok)
+                    {
+                        unsigned char rr = expectedNs ? C_RR1 : C_RR0;
+                        if (sendSupervisionFrame(A_TX, rr) < 0)
+                        {
+                            closeSerialPort();
+                            return -1;
+                        }
+                    }
+                    else if (!bcc2Ok)
+                    {
+                        unsigned char rej = expectedNs ? C_REJ1 : C_REJ0;
+                        if (sendSupervisionFrame(A_TX, rej) < 0)
+                        {
+                            closeSerialPort();
+                            return -1;
+                        }
+                    }
+                }
+                iLength = 0;
+                iEscape = 0;
+                iState = I_FLAG;
+            }
+            else
+            {
+                if (iLength < MAX_PAYLOAD_SIZE + 1)
+                    iData[iLength++] = byte;
+                else
+                {
+                    iLength = 0;
+                    iEscape = 0;
+                    iState = I_START;
+                }
+            }
+            break;
+        }
 
         if (discState == STOP)
         {
