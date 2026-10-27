@@ -618,8 +618,8 @@ int llCloseTx()
         return -1;
     }
 
-    // Finish the handshake with UA, then release the port.
-    if (sendSupervisionFrame(A_TX, C_UA) < 0)
+    // The transmitter's reply to the receiver's DISC uses the receiver address.
+    if (sendSupervisionFrame(A_RX, C_UA) < 0)
     {
         closeSerialPort();
         return -1;
@@ -658,7 +658,7 @@ int llCloseRx()
         if (res < 0) { closeSerialPort(); return -1; }
         if (res == 0) continue;
 
-        updateState(&uaState, byte, A_TX, C_UA);
+        updateState(&uaState, byte, A_RX, C_UA);
         updateState(&discState, byte, A_TX, C_DISC);
 
         if (discState == STOP)
