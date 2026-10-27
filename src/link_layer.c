@@ -165,8 +165,6 @@ int llOpenTx(LinkLayer llParameters)
     };
     
 
-    printf("Serial port %s opened\n", llParameters.serialPort);
-
     // SET starts the connection; keep retrying until UA arrives.
     unsigned char setFrame[5];
 
@@ -182,8 +180,6 @@ int llOpenTx(LinkLayer llParameters)
 
     while (alarmCount <= llParameters.nRetransmissions && !uaReceived)
     {
-        printf("A enviar SET - tentativa %d\n", alarmCount + 1);
-
         if (writeFrame(setFrame, 5) < 0)
         {
             alarm(0);
@@ -220,8 +216,6 @@ int llOpenTx(LinkLayer llParameters)
                 continue;
             }
             
-            printf("Byte received: 0x%02X\n", byte);
-
             updateState(&state, byte, A_TX, C_UA);
                 
         }
@@ -232,13 +226,11 @@ int llOpenTx(LinkLayer llParameters)
             alarmEnabled = 0;
             uaReceived = 1;
 
-            printf("UA recebido corretamente\n");
         }
     }
        
     if (!uaReceived)
     {
-        printf("Falha ao estabelecer ligação\n");
         alarm(0);
         closeSerialPort();
         return -1;
@@ -260,8 +252,6 @@ int llOpenRx(LinkLayer llParameters)
     savedRetransmissions = llParameters.nRetransmissions;
     Ns = 0;
     expectedNs = 0;
-
-    printf("Serial port %s opened\n", llParameters.serialPort);
 
     State state = START;
     unsigned char byte;
@@ -285,8 +275,6 @@ int llOpenRx(LinkLayer llParameters)
         updateState(&state, byte, A_TX, C_SET);
     }
         
-    printf("SET recebido corretamente\n");
-   
     unsigned char uaFrame[5];
 
     uaFrame[0] = FLAG;
@@ -300,8 +288,6 @@ int llOpenRx(LinkLayer llParameters)
         closeSerialPort();
         return -1;
     }
-
-    printf("UA enviado\n");
 
     return 0;
 }
