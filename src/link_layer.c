@@ -5,6 +5,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <errno.h>
 #include <signal.h>
 #include <unistd.h>
 
@@ -37,8 +38,8 @@ static int expectedNs = 0; // bit number for the next frame we want
 static int savedTimeout = 0;
 static int savedRetransmissions = 0;
 
-int alarmEnabled = 0;
-int alarmCount = 0;
+volatile sig_atomic_t alarmEnabled = 0;
+volatile sig_atomic_t alarmCount = 0;
 
 //-------------------------------------- TYPES --------------------------------------------//
 
@@ -62,10 +63,9 @@ typedef enum {
 //--------------------------------- SHARED HELPERS ----------------------------------------//
 
 void alarmHandler(int signal) {
+    (void)signal;
     alarmEnabled = 0;
     alarmCount++;
-
-    printf("Alarm #%d recieved\n", alarmCount);
 }
 
 static void updateState(State *state, unsigned char byte,
@@ -150,6 +150,8 @@ int llOpenTx(LinkLayer llParameters)
 
     savedTimeout = llParameters.timeout;
     savedRetransmissions = llParameters.nRetransmissions;
+    Ns = 0;
+    expectedNs = 0;
 
     struct sigaction act = {0};
     act.sa_handler = &alarmHandler;
@@ -199,7 +201,14 @@ int llOpenTx(LinkLayer llParameters)
         {
             int res = readByteSerialPort(&byte);
 
-            if (res < 0 && alarmEnabled)
+            if (res < 0 && errno == EINTR)
+            {
+                if (!alarmEnabled)
+                    break;
+                continue;
+            }
+
+            if (res < 0)
             {
                 alarm(0);
                 closeSerialPort();
@@ -247,6 +256,11 @@ int llOpenRx(LinkLayer llParameters)
         return -1;
     }
 
+    savedTimeout = llParameters.timeout;
+    savedRetransmissions = llParameters.nRetransmissions;
+    Ns = 0;
+    expectedNs = 0;
+
     printf("Serial port %s opened\n", llParameters.serialPort);
 
     State state = START;
@@ -267,8 +281,6 @@ int llOpenRx(LinkLayer llParameters)
         {
             continue;
         }
-
-        printf("Byte received: 0x%02X\n", byte);
 
         updateState(&state, byte, A_TX, C_SET);
     }
@@ -318,6 +330,9 @@ static int stuffByte(unsigned char b, unsigned char *out)
 // Build an information frame and wait for its RR/REJ response.
 int llSend(const unsigned char *buf, int bufSize)
 {
+    if (buf == NULL || bufSize < 0 || bufSize > MAX_PAYLOAD_SIZE)
+        return -1;
+
     int maxSize = 2*(bufSize + 1) + 5;
     unsigned char *frame = malloc(maxSize);
 
@@ -373,6 +388,12 @@ int llSend(const unsigned char *buf, int bufSize)
         while (rrState != STOP && rejState != STOP && alarmEnabled)
         {
             int res = readByteSerialPort(&byte);
+            if (res < 0 && errno == EINTR)
+            {
+                if (!alarmEnabled)
+                    break;
+                continue;
+            }
             if (res < 0)
             {
                 alarm(0);
@@ -421,12 +442,26 @@ int llReceive(unsigned char *packet)
     unsigned char frameData[MAX_PAYLOAD_SIZE + 1]; // payload plus BCC2
     int i = 0;          // bytes collected so far
     int escape = 0;     // previous byte was ESC
+    State setState = START;
 
     while(1){
         
         int res = readByteSerialPort(&byte);
         if (res < 0) return -1;
         if (res == 0) continue;
+
+        // A retransmitted SET means the UA from llOpenRx was lost. Keep
+        // answering it while waiting for information frames.
+        if (state != I_DATA)
+        {
+            updateState(&setState, byte, A_TX, C_SET);
+            if (setState == STOP)
+            {
+                if (sendSupervisionFrame(A_TX, C_UA) < 0)
+                    return -1;
+                setState = START;
+            }
+        }
 
         switch(state){
             case I_START:
@@ -550,7 +585,20 @@ int llCloseTx()
         while (state != STOP && alarmEnabled)
         {
             int res = readByteSerialPort(&byte);
-            if (res <= 0) continue;
+            if (res < 0 && errno == EINTR)
+            {
+                if (!alarmEnabled)
+                    break;
+                continue;
+            }
+            if (res < 0)
+            {
+                alarm(0);
+                alarmEnabled = 0;
+                closeSerialPort();
+                return -1;
+            }
+            if (res == 0) continue;
 
             updateState(&state, byte, A_RX, C_DISC);
         }
