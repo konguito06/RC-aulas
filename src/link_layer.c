@@ -1,12 +1,14 @@
 // RCOM 2026/2027
 // Link layer protocol implementation
 
-#define _POSIX_SOURCE 1 // POSIX compliant source
+#define _POSIX_C_SOURCE 200809L // POSIX compliant source (needed for clock_gettime)
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <errno.h>
 #include <signal.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "link_layer.h"
@@ -16,13 +18,15 @@
 
 #define FLAG 0x7E
 #define ESC 0x7D
+#define ESC_FLAG 0x5E // FLAG ^ 0x20
+#define ESC_ESC 0x5D  // ESC ^ 0x20
 
 #define A_TX 0x03
 #define A_RX 0x01
 
-#define C_SET 0X03
+#define C_SET 0x03
 #define C_UA 0x07
-#define C_DISC 0X0B
+#define C_DISC 0x0B
 
 #define C_I0 0x00
 #define C_I1 0x80
@@ -33,17 +37,33 @@
 
 //------------------------------------ GLOBAL STATE ---------------------------------------//
 
-static int Ns = 0;         // bit number for the next frame we send
-static int expectedNs = 0; // bit number for the next frame we want
+static int Ns = 0;          // bit number for the next frame we send
+static int expectedNs = 0;  // bit number for the next frame we want
 static int savedTimeout = 0;
 static int savedRetransmissions = 0;
+static int discPending = 0; // rx: llReceive already consumed the transmitter's DISC
 
-volatile sig_atomic_t alarmEnabled = 0;
-volatile sig_atomic_t alarmCount = 0;
+static volatile sig_atomic_t alarmEnabled = 0;
+static volatile sig_atomic_t alarmCount = 0;
+
+//------------------------------------ STATISTICS -----------------------------------------//
+
+static struct
+{
+    struct timespec start, end; // from connection established to close requested
+    long framesSent;            // tx: I-frames acknowledged with RR
+    long retransmissions;       // tx: I-frames written again
+    long timeouts;              // tx: waits for RR/REJ that timed out
+    long rejReceived;           // tx: REJs received
+    long framesReceived;        // rx: new I-frames delivered to the application
+    long duplicates;            // rx: repeated I-frames acknowledged again
+    long rejSent;               // rx: I-frames rejected because of a bad BCC2
+    long bytes;                 // payload bytes sent (tx) or delivered (rx)
+} stats;
 
 //-------------------------------------- TYPES --------------------------------------------//
 
-typedef enum { 
+typedef enum {
     START,
     FLAG_RCV,
     A_RCV,
@@ -60,12 +80,56 @@ typedef enum {
     I_DATA     // header is valid, collecting data until the closing FLAG
 } IState;
 
+typedef struct {
+    IState state;
+    unsigned char c;                          // control byte (I0 or I1)
+    unsigned char data[MAX_PAYLOAD_SIZE + 1]; // destuffed payload plus BCC2
+    int len;                                  // bytes in data
+    int escape;                               // previous byte was ESC
+    int badEscape;                            // ESC followed by something invalid
+} IParser;
+
 //--------------------------------- SHARED HELPERS ----------------------------------------//
 
-void alarmHandler(int signal) {
+static void alarmHandler(int signal)
+{
     (void)signal;
     alarmEnabled = 0;
     alarmCount++;
+}
+
+static int installAlarmHandler(void)
+{
+    // No SA_RESTART, so the alarm interrupts a blocked read with EINTR.
+    struct sigaction act = {0};
+    act.sa_handler = &alarmHandler;
+
+    if (sigaction(SIGALRM, &act, NULL) == -1)
+    {
+        perror("sigaction");
+        return -1;
+    }
+    return 0;
+}
+
+static void initLink(LinkLayer llParameters)
+{
+    savedTimeout = llParameters.timeout;
+    savedRetransmissions = llParameters.nRetransmissions;
+    Ns = 0;
+    expectedNs = 0;
+    discPending = 0;
+    memset(&stats, 0, sizeof(stats));
+}
+
+// Reads one byte. Returns 1 if a byte was read, 0 if none arrived or the alarm
+// interrupted the read, -1 on error.
+static int readByte(unsigned char *byte)
+{
+    int res = readByteSerialPort(byte);
+    if (res < 0 && errno == EINTR)
+        return 0;
+    return res;
 }
 
 static void updateState(State *state, unsigned char byte,
@@ -85,7 +149,7 @@ static void updateState(State *state, unsigned char byte,
         else if (byte != FLAG)
             *state = START;
         break;
-    
+
     case A_RCV:
         if (byte == expectedC)
             *state = C_RCV;
@@ -113,7 +177,7 @@ static void updateState(State *state, unsigned char byte,
 
     case STOP:
         break;
-    }    
+    }
 }
 
 static int writeFrame(const unsigned char *frame, int frameSize)
@@ -137,6 +201,33 @@ static int sendSupervisionFrame(unsigned char a, unsigned char c)
     return writeFrame(f, 5);
 }
 
+static void printStats(int isTx)
+{
+    double secs = (stats.end.tv_sec - stats.start.tv_sec) +
+                  (stats.end.tv_nsec - stats.start.tv_nsec) / 1e9;
+    double bitrate = secs > 0 ? stats.bytes * 8 / secs : 0;
+
+    printf("\n---------- Link layer statistics (%s) ----------\n", isTx ? "tx" : "rx");
+    if (isTx)
+    {
+        printf("I-frames sent:          %ld\n", stats.framesSent);
+        printf("Retransmissions:        %ld\n", stats.retransmissions);
+        printf("Timeouts:               %ld\n", stats.timeouts);
+        printf("REJ received:           %ld\n", stats.rejReceived);
+        printf("Payload bytes sent:     %ld\n", stats.bytes);
+    }
+    else
+    {
+        printf("I-frames received:      %ld\n", stats.framesReceived);
+        printf("Duplicates received:    %ld\n", stats.duplicates);
+        printf("REJ sent:               %ld\n", stats.rejSent);
+        printf("Payload bytes received: %ld\n", stats.bytes);
+    }
+    printf("Transfer time:          %.3f s\n", secs);
+    printf("Throughput:             %.0f bit/s\n", bitrate);
+    printf("------------------------------------------------\n");
+}
+
 //------------------------------------ LINK OPEN ------------------------------------------//
 
 int llOpenTx(LinkLayer llParameters)
@@ -144,43 +235,25 @@ int llOpenTx(LinkLayer llParameters)
     if (openSerialPort(llParameters.serialPort, llParameters.baudRate) < 0)
     {
         perror("openSerialPort");
-        alarm(0);
         return -1;
     }
 
-    savedTimeout = llParameters.timeout;
-    savedRetransmissions = llParameters.nRetransmissions;
-    Ns = 0;
-    expectedNs = 0;
+    initLink(llParameters);
 
-    struct sigaction act = {0};
-    act.sa_handler = &alarmHandler;
-
-    if (sigaction(SIGALRM, &act, NULL) == -1)
+    if (installAlarmHandler() < 0)
     {
-        perror("sigaction");
-        alarm(0);
         closeSerialPort();
         return -1;
-    };
-    
+    }
 
     // SET starts the connection; keep retrying until UA arrives.
-    unsigned char setFrame[5];
-
-    setFrame[0] = FLAG;
-    setFrame[1] = A_TX;
-    setFrame[2] = C_SET;
-    setFrame[3] = A_TX ^ C_SET;
-    setFrame[4] = FLAG;
-
     alarmCount = 0;
     alarmEnabled = 0;
     int uaReceived = 0;
 
-    while (alarmCount <= llParameters.nRetransmissions && !uaReceived)
+    while (alarmCount <= savedRetransmissions && !uaReceived)
     {
-        if (writeFrame(setFrame, 5) < 0)
+        if (sendSupervisionFrame(A_TX, C_SET) < 0)
         {
             alarm(0);
             closeSerialPort();
@@ -188,36 +261,23 @@ int llOpenTx(LinkLayer llParameters)
         }
 
         alarmEnabled = 1;
-        alarm(llParameters.timeout);
+        alarm(savedTimeout);
 
         State state = START;
         unsigned char byte;
 
         while (state != STOP && alarmEnabled)
         {
-            int res = readByteSerialPort(&byte);
-
-            if (res < 0 && errno == EINTR)
-            {
-                if (!alarmEnabled)
-                    break;
-                continue;
-            }
-
+            int res = readByte(&byte);
             if (res < 0)
             {
                 alarm(0);
                 closeSerialPort();
                 return -1;
             }
+            if (res == 0) continue;
 
-            if (res <= 0)
-            {
-                continue;
-            }
-            
             updateState(&state, byte, A_TX, C_UA);
-                
         }
 
         if (state == STOP)
@@ -225,18 +285,17 @@ int llOpenTx(LinkLayer llParameters)
             alarm(0);
             alarmEnabled = 0;
             uaReceived = 1;
-
         }
     }
-       
+
     if (!uaReceived)
     {
-        alarm(0);
+        printf("No UA received, could not open the connection\n");
         closeSerialPort();
         return -1;
     }
 
-    alarm(0);
+    clock_gettime(CLOCK_MONOTONIC, &stats.start);
     return 0;
 }
 
@@ -248,10 +307,14 @@ int llOpenRx(LinkLayer llParameters)
         return -1;
     }
 
-    savedTimeout = llParameters.timeout;
-    savedRetransmissions = llParameters.nRetransmissions;
-    Ns = 0;
-    expectedNs = 0;
+    initLink(llParameters);
+
+    // The receiver only uses the alarm while closing, but set it up here.
+    if (installAlarmHandler() < 0)
+    {
+        closeSerialPort();
+        return -1;
+    }
 
     State state = START;
     unsigned char byte;
@@ -259,36 +322,24 @@ int llOpenRx(LinkLayer llParameters)
     // Wait for SET before replying with UA.
     while (state != STOP)
     {
-        int res = readByteSerialPort(&byte);
-
+        int res = readByte(&byte);
         if (res < 0)
         {
             closeSerialPort();
             return -1;
         }
-
-        if (res == 0)
-        {
-            continue;
-        }
+        if (res == 0) continue;
 
         updateState(&state, byte, A_TX, C_SET);
     }
-        
-    unsigned char uaFrame[5];
 
-    uaFrame[0] = FLAG;
-    uaFrame[1] = A_TX;
-    uaFrame[2] = C_UA;
-    uaFrame[3] = A_TX ^ C_UA;
-    uaFrame[4] = FLAG;
-
-    if (writeFrame(uaFrame, 5) < 0)
+    if (sendSupervisionFrame(A_TX, C_UA) < 0)
     {
         closeSerialPort();
         return -1;
     }
 
+    clock_gettime(CLOCK_MONOTONIC, &stats.start);
     return 0;
 }
 
@@ -300,13 +351,13 @@ static int stuffByte(unsigned char b, unsigned char *out)
     if (b == FLAG)
     {
         out[0] = ESC;
-        out[1] = 0x5E;
+        out[1] = ESC_FLAG;
         return 2;
     }
     if (b == ESC)
     {
         out[0] = ESC;
-        out[1] = 0x5D;
+        out[1] = ESC_ESC;
         return 2;
     }
     out[0] = b;
@@ -341,21 +392,27 @@ int llSend(const unsigned char *buf, int bufSize)
 
     // BCC2 checks the payload; both it and the payload need stuffing.
     unsigned char bcc2 = 0;
-    for (int i = 0; i < bufSize; i++){
-        bcc2 ^= buf[i];      //Xor do byte
-        frameSize += stuffByte(buf[i], &frame[frameSize]); //stuffa todos os bytes
+    for (int i = 0; i < bufSize; i++)
+    {
+        bcc2 ^= buf[i];
+        frameSize += stuffByte(buf[i], &frame[frameSize]);
     }
 
-    frameSize += stuffByte(bcc2, &frame[frameSize]);   // BCC2 tbm fica stuffed
+    frameSize += stuffByte(bcc2, &frame[frameSize]); // BCC2 is stuffed too
     frame[frameSize++] = FLAG;
 
     //-------------------- Send and wait for RR/REJ -----------------------//
 
     int result = -1;
     int accepted = 0;
+    int attempts = 0;
     alarmCount = 0;
 
-    while((alarmCount <= savedRetransmissions) && !accepted){
+    while ((alarmCount <= savedRetransmissions) && !accepted)
+    {
+        if (attempts++ > 0)
+            stats.retransmissions++;
+
         if (writeFrame(frame, frameSize) < 0)
         {
             free(frame);
@@ -373,13 +430,7 @@ int llSend(const unsigned char *buf, int bufSize)
 
         while (rrState != STOP && rejState != STOP && alarmEnabled)
         {
-            int res = readByteSerialPort(&byte);
-            if (res < 0 && errno == EINTR)
-            {
-                if (!alarmEnabled)
-                    break;
-                continue;
-            }
+            int res = readByte(&byte);
             if (res < 0)
             {
                 alarm(0);
@@ -399,17 +450,24 @@ int llSend(const unsigned char *buf, int bufSize)
             alarmEnabled = 0;
             // The RR confirms the next sequence bit, so advance ours.
             Ns = !Ns;
+            stats.framesSent++;
+            stats.bytes += bufSize;
             result = bufSize;
             accepted = 1;
         }
-
         else if (rejState == STOP)
         {
+            // A REJ proves the link is alive, so it doesn't use up the retry
+            // budget (that is only for timeouts). The loop retransmits.
             alarm(0);
             alarmEnabled = 0;
-            alarmCount++;       // REJ counts as a retry, loop retransmits
+            stats.rejReceived++;
         }
-        // else: timeout. The alarm handler already did alarmCount++
+        else
+        {
+            // Timeout. The alarm handler already did alarmCount++
+            stats.timeouts++;
+        }
     }
 
     free(frame);
@@ -418,136 +476,174 @@ int llSend(const unsigned char *buf, int bufSize)
 
 //----------------------------------- LINK RECEIVE ----------------------------------------//
 
+static void resetParser(IParser *p)
+{
+    p->state = I_START;
+    p->len = 0;
+    p->escape = 0;
+    p->badEscape = 0;
+}
+
+// Feeds one byte to the I-frame parser. Returns 1 when a frame with a valid
+// header has been closed by a FLAG (p->c and p->data hold it), 0 otherwise.
+static int parseIByte(IParser *p, unsigned char byte)
+{
+    switch (p->state)
+    {
+    case I_START:
+        if (byte == FLAG) p->state = I_FLAG;
+        break;
+
+    case I_FLAG:
+        if (byte == A_TX) p->state = I_A;
+        else if (byte != FLAG) p->state = I_START;
+        break;
+
+    case I_A:
+        if (byte == C_I0 || byte == C_I1) { p->c = byte; p->state = I_C; }
+        else if (byte == FLAG) p->state = I_FLAG;
+        else p->state = I_START;
+        break;
+
+    case I_C:
+        if (byte == (A_TX ^ p->c))
+        {
+            p->len = 0;
+            p->escape = 0;
+            p->badEscape = 0;
+            p->state = I_DATA;
+        }
+        else if (byte == FLAG) p->state = I_FLAG;
+        else p->state = I_START;
+        break;
+
+    case I_DATA:
+        if (byte == FLAG)
+        {
+            // The frame ends here. This FLAG can also open the next one.
+            int complete = (p->len >= 1); // at least BCC2
+            if (p->escape)
+                p->badEscape = 1;         // ESC right before the FLAG
+            p->escape = 0;
+            p->state = I_FLAG;
+            return complete;
+        }
+
+        if (p->len >= MAX_PAYLOAD_SIZE + 1)
+        {
+            // Too long: the closing FLAG was lost. Drop it and let the
+            // sender's timeout retransmit.
+            resetParser(p);
+            break;
+        }
+
+        if (p->escape)
+        {
+            if (byte != ESC_FLAG && byte != ESC_ESC)
+                p->badEscape = 1;          // noise; the frame will be rejected
+            p->data[p->len++] = byte ^ 0x20; // undo stuffing
+            p->escape = 0;
+        }
+        else if (byte == ESC)
+            p->escape = 1;                 // next byte is the stuffed one
+        else
+            p->data[p->len++] = byte;
+        break;
+    }
+    return 0;
+}
+
+static int payloadOk(const IParser *p)
+{
+    unsigned char bcc2 = 0;
+    for (int k = 0; k < p->len - 1; k++)
+        bcc2 ^= p->data[k];             // XOR of the data only
+    return !p->badEscape && bcc2 == p->data[p->len - 1]; // last byte is BCC2
+}
+
+// Answers a complete I-frame with RR or REJ.
+// Returns 1 if it is new and valid (the caller delivers it), 0 if it was a
+// duplicate or corrupted, -1 on write error.
+static int answerIFrame(const IParser *p)
+{
+    int frameNs = (p->c == C_I1);
+
+    if (frameNs != expectedNs)
+    {
+        // It is a duplicate; resend RR in case the last one was lost.
+        stats.duplicates++;
+        return sendSupervisionFrame(A_TX, expectedNs ? C_RR1 : C_RR0) < 0 ? -1 : 0;
+    }
+
+    if (!payloadOk(p))
+    {
+        // Bad payload checksum: ask the sender to retry it.
+        stats.rejSent++;
+        return sendSupervisionFrame(A_TX, expectedNs ? C_REJ1 : C_REJ0) < 0 ? -1 : 0;
+    }
+
+    // Accept this frame and ask for the next sequence bit.
+    expectedNs = !expectedNs;
+    return sendSupervisionFrame(A_TX, expectedNs ? C_RR1 : C_RR0) < 0 ? -1 : 1;
+}
+
 int llReceive(unsigned char *packet)
-{   
+{
     if (packet == NULL)
         return -1;
 
-    IState state = I_START;
-    unsigned char a = 0, c = 0, byte;
-    unsigned char frameData[MAX_PAYLOAD_SIZE + 1]; // payload plus BCC2
-    int i = 0;          // bytes collected so far
-    int escape = 0;     // previous byte was ESC
-    State setState = START;
+    IParser parser;
+    resetParser(&parser);
+    State setState = START, discState = START;
+    unsigned char byte;
 
-    while(1){
-        
-        int res = readByteSerialPort(&byte);
+    while (1)
+    {
+        int res = readByte(&byte);
         if (res < 0) return -1;
         if (res == 0) continue;
 
-        // A retransmitted SET means the UA from llOpenRx was lost. Keep
-        // answering it while waiting for information frames.
-        if (state != I_DATA)
+        // Supervision frames can't appear inside a stuffed I-frame, so it is
+        // safe to look for them on every byte.
+
+        // A retransmitted SET means the UA from llOpenRx was lost.
+        updateState(&setState, byte, A_TX, C_SET);
+        if (setState == STOP)
         {
-            updateState(&setState, byte, A_TX, C_SET);
-            if (setState == STOP)
-            {
-                if (sendSupervisionFrame(A_TX, C_UA) < 0)
-                    return -1;
-                setState = START;
-            }
+            if (sendSupervisionFrame(A_TX, C_UA) < 0)
+                return -1;
+            setState = START;
         }
 
-        switch(state){
-            case I_START:
-                if (byte == FLAG) state = I_FLAG;
-                break;
+        // A DISC means the transmitter is closing (maybe it gave up). Stop
+        // here instead of waiting forever; llCloseRx will answer it.
+        updateState(&discState, byte, A_TX, C_DISC);
+        if (discState == STOP)
+        {
+            discPending = 1;
+            return -1;
+        }
 
-            case I_FLAG:
-                if (byte == A_TX) { a = byte; state = I_A; }
-                else if (byte != FLAG) state = I_START;
-                break;
+        if (!parseIByte(&parser, byte))
+            continue;
 
-            case I_A:
-                if (byte == C_I0 || byte == C_I1) { c = byte; state = I_C; }
-                else if (byte == FLAG) state = I_FLAG;
-                else state = I_START;
-                break;
-
-            case I_C:
-                if (byte == (a ^ c)) { i = 0; escape = 0; state = I_DATA; }
-                else if (byte == FLAG) state = I_FLAG;
-                else state = I_START;
-                break;
-            
-            case I_DATA:
-                if (escape)
-                {
-                    if (byte == FLAG)
-                    {
-                        i = 0; escape = 0; state = I_FLAG;
-                        break;
-                    }
-
-                    if (i >= MAX_PAYLOAD_SIZE + 1)
-                    {
-                        i = 0; escape = 0; state = I_START;
-                        break;
-                    }
-                    frameData[i++] = byte ^ 0x20;   // desfazer stuffing
-                    escape = 0;
-                }
-                else if (byte == ESC)
-                {
-                    escape = 1;                  // proximo byte e o stuffed 
-                }
-                else if (byte == FLAG)
-                {
-                    if (i < 1) { state = I_FLAG; break; }   // no room for BCC2
-                    int frameNs = (c == C_I1);
-                    unsigned char bcc2 = 0;
-                    
-                    for (int k = 0; k < i - 1; k++)
-                        bcc2 ^= frameData[k];               // XOR of the data only
-                    int bcc2Ok = (bcc2 == frameData[i - 1]); // last byte is BCC2
-
-                    if (frameNs == expectedNs)
-                    {
-                        if (bcc2Ok)
-                        {
-                            // Accept this frame and ask for the next sequence bit.
-                            expectedNs = !expectedNs;
-                            if (sendSupervisionFrame(A_TX, expectedNs ? C_RR1 : C_RR0) < 0)
-                                return -1;
-                            for (int k = 0; k < i - 1; k++)
-                                packet[k] = frameData[k];
-                            return i - 1;                   // data length, without BCC2
-                        }
-                        else
-                        {
-                            // Bad payload checksum: ask the sender to retry it.
-                            if (sendSupervisionFrame(A_TX, expectedNs ? C_REJ1 : C_REJ0) < 0)
-                                return -1;
-                        }
-                    }
-                    else
-                    {
-                        // It is a duplicate; resend RR in case the last one was lost.
-                        if (sendSupervisionFrame(A_TX, expectedNs ? C_RR1 : C_RR0) < 0)
-                            return -1;
-                    }
-
-                    state = I_START;   // frame handled, wait for the next one
-                    i = 0;
-                }
-                else
-                {
-                    if (i >= MAX_PAYLOAD_SIZE + 1)
-                    {
-                        i = 0; escape = 0; state = I_START;
-                        break;
-                    }
-                    frameData[i++] = byte;
-                }
-                break;
+        int answer = answerIFrame(&parser);
+        if (answer < 0)
+            return -1;
+        if (answer == 1)
+        {
+            int size = parser.len - 1;      // data length, without BCC2
+            memcpy(packet, parser.data, size);
+            stats.framesReceived++;
+            stats.bytes += size;
+            return size;
         }
     }
 }
 
 //------------------------------------ LINK CLOSE -----------------------------------------//
 
-int llCloseTx()
+static int closeTx(void)
 {
     alarmCount = 0;
     alarmEnabled = 0;
@@ -557,10 +653,7 @@ int llCloseTx()
     {
         // Start disconnect; wait for the receiver's DISC.
         if (sendSupervisionFrame(A_TX, C_DISC) < 0)
-        {
-            closeSerialPort();
             return -1;
-        }
 
         alarmEnabled = 1;
         alarm(savedTimeout);
@@ -570,18 +663,11 @@ int llCloseTx()
 
         while (state != STOP && alarmEnabled)
         {
-            int res = readByteSerialPort(&byte);
-            if (res < 0 && errno == EINTR)
-            {
-                if (!alarmEnabled)
-                    break;
-                continue;
-            }
+            int res = readByte(&byte);
             if (res < 0)
             {
                 alarm(0);
                 alarmEnabled = 0;
-                closeSerialPort();
                 return -1;
             }
             if (res == 0) continue;
@@ -599,172 +685,114 @@ int llCloseTx()
 
     if (!discReceived)
     {
-        printf("Falha ao fechar ligação\n");
-        closeSerialPort();
+        printf("No DISC received, could not close the connection properly\n");
         return -1;
     }
 
     // The transmitter's reply to the receiver's DISC uses the receiver address.
-    if (sendSupervisionFrame(A_RX, C_UA) < 0)
+    return sendSupervisionFrame(A_RX, C_UA);
+}
+
+int llCloseTx()
+{
+    clock_gettime(CLOCK_MONOTONIC, &stats.end);
+    int result = closeTx();
+    printStats(TRUE);
+    closeSerialPort();
+    return result;
+}
+
+static int closeRx(void)
+{
+    IParser parser;
+    resetParser(&parser);
+    unsigned char byte;
+
+    // Wait for the transmitter's DISC, unless llReceive already got it.
+    // If the RR for the last I-frame was lost, the transmitter is still
+    // repeating that frame, so keep acknowledging it meanwhile.
+    State discState = discPending ? STOP : START;
+    discPending = 0;
+
+    while (discState != STOP)
     {
-        closeSerialPort();
+        int res = readByte(&byte);
+        if (res < 0) return -1;
+        if (res == 0) continue;
+
+        updateState(&discState, byte, A_TX, C_DISC);
+
+        if (parseIByte(&parser, byte))
+        {
+            int answer = answerIFrame(&parser);
+            if (answer < 0)
+                return -1;
+            if (answer == 1)
+                printf("Warning: new I-frame received while closing, discarded\n");
+        }
+    }
+
+    // Reply with DISC and wait for the final UA. Resend our DISC if the UA
+    // doesn't arrive in time, or right away if the transmitter repeats its
+    // DISC (ours was lost).
+    alarmCount = 0;
+    alarmEnabled = 0;
+    int uaReceived = 0;
+
+    while ((alarmCount <= savedRetransmissions) && !uaReceived)
+    {
+        if (sendSupervisionFrame(A_RX, C_DISC) < 0)
+            return -1;
+
+        alarmEnabled = 1;
+        alarm(savedTimeout);
+
+        State uaState = START;
+        discState = START;
+
+        while (uaState != STOP && discState != STOP && alarmEnabled)
+        {
+            int res = readByte(&byte);
+            if (res < 0)
+            {
+                alarm(0);
+                alarmEnabled = 0;
+                return -1;
+            }
+            if (res == 0) continue;
+
+            updateState(&uaState, byte, A_RX, C_UA);
+            updateState(&discState, byte, A_TX, C_DISC);
+        }
+
+        if (uaState == STOP)
+        {
+            alarm(0);
+            alarmEnabled = 0;
+            uaReceived = 1;
+        }
+        else if (discState == STOP)
+        {
+            alarm(0);
+            alarmEnabled = 0;
+        }
+        // else: timeout. The alarm handler already did alarmCount++
+    }
+
+    if (!uaReceived)
+    {
+        printf("No UA received, could not close the connection properly\n");
         return -1;
     }
 
-    closeSerialPort();
     return 0;
 }
 
 int llCloseRx()
 {
-    State state = START;
-    IState iState = I_START;
-    unsigned char iAddress = 0, iControl = 0;
-    unsigned char iData[MAX_PAYLOAD_SIZE + 1];
-    int iLength = 0;
-    int iEscape = 0;
-    unsigned char byte;
-
-    // Wait for the sender to start closing the connection.
-    while (state != STOP)
-    {
-        int res = readByteSerialPort(&byte);
-        if (res < 0) { closeSerialPort(); return -1; }
-        if (res == 0) continue;
-
-        updateState(&state, byte, A_TX, C_DISC);
-    }
-
-    if (sendSupervisionFrame(A_RX, C_DISC) < 0)
-    {
-        closeSerialPort();
-        return -1;
-    }
-
-    State uaState = START, discState = START;
-
-    while (uaState != STOP)
-    {
-        int res = readByteSerialPort(&byte);
-        if (res < 0) { closeSerialPort(); return -1; }
-        if (res == 0) continue;
-
-        updateState(&uaState, byte, A_RX, C_UA);
-        updateState(&discState, byte, A_TX, C_DISC);
-
-        // llReceive has already delivered the final packet to the application.
-        // If its RR was lost, acknowledge the retransmitted duplicate here too.
-        switch (iState)
-        {
-        case I_START:
-            if (byte == FLAG) iState = I_FLAG;
-            break;
-
-        case I_FLAG:
-            if (byte == A_TX) { iAddress = byte; iState = I_A; }
-            else if (byte != FLAG) iState = I_START;
-            break;
-
-        case I_A:
-            if (iAddress == A_TX && (byte == C_I0 || byte == C_I1))
-            {
-                iControl = byte;
-                iState = I_C;
-            }
-            else if (byte == FLAG) iState = I_FLAG;
-            else iState = I_START;
-            break;
-
-        case I_C:
-            if (byte == (iAddress ^ iControl))
-            {
-                iLength = 0;
-                iEscape = 0;
-                iState = I_DATA;
-            }
-            else if (byte == FLAG) iState = I_FLAG;
-            else iState = I_START;
-            break;
-
-        case I_DATA:
-            if (iEscape)
-            {
-                if (byte == 0x5E || byte == 0x5D)
-                {
-                    if (iLength < MAX_PAYLOAD_SIZE + 1)
-                        iData[iLength++] = byte ^ 0x20;
-                    else
-                        iState = I_START;
-                }
-                else
-                {
-                    iState = (byte == FLAG) ? I_FLAG : I_START;
-                }
-                iEscape = 0;
-            }
-            else if (byte == ESC)
-            {
-                iEscape = 1;
-            }
-            else if (byte == FLAG)
-            {
-                if (iLength > 0)
-                {
-                    unsigned char bcc2 = 0;
-                    for (int i = 0; i < iLength - 1; i++)
-                        bcc2 ^= iData[i];
-
-                    int frameNs = (iControl == C_I1);
-                    int bcc2Ok = (bcc2 == iData[iLength - 1]);
-
-                    if (frameNs != expectedNs && bcc2Ok)
-                    {
-                        unsigned char rr = expectedNs ? C_RR1 : C_RR0;
-                        if (sendSupervisionFrame(A_TX, rr) < 0)
-                        {
-                            closeSerialPort();
-                            return -1;
-                        }
-                    }
-                    else if (!bcc2Ok)
-                    {
-                        unsigned char rej = expectedNs ? C_REJ1 : C_REJ0;
-                        if (sendSupervisionFrame(A_TX, rej) < 0)
-                        {
-                            closeSerialPort();
-                            return -1;
-                        }
-                    }
-                }
-                iLength = 0;
-                iEscape = 0;
-                iState = I_FLAG;
-            }
-            else
-            {
-                if (iLength < MAX_PAYLOAD_SIZE + 1)
-                    iData[iLength++] = byte;
-                else
-                {
-                    iLength = 0;
-                    iEscape = 0;
-                    iState = I_START;
-                }
-            }
-            break;
-        }
-
-        if (discState == STOP)
-        {
-            if (sendSupervisionFrame(A_RX, C_DISC) < 0)
-            {
-                closeSerialPort();
-                return -1;
-            }
-            discState = START;
-        }
-    }
-
+    clock_gettime(CLOCK_MONOTONIC, &stats.end);
+    int result = closeRx();
+    printStats(FALSE);
     closeSerialPort();
-    return 0;
+    return result;
 }
