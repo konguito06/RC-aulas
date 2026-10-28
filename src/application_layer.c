@@ -87,7 +87,7 @@ static int sendFile(const char *filename)
 
     unsigned char packet[MAX_PAYLOAD_SIZE];
 
-    //------------------------- START packet -------------------------//
+    //START packet//
 
     int controlSize = buildControlPacket(C_START, fileSize, name, packet);
     if (controlSize < 0)
@@ -103,7 +103,7 @@ static int sendFile(const char *filename)
         return -1;
     }
 
-    //------------------------- Data packets -------------------------//
+    //Data packets//
 
     long bytesSent = 0;
     int nRead;
@@ -134,7 +134,7 @@ static int sendFile(const char *filename)
 
     fclose(file);
 
-    //-------------------------- END packet --------------------------//
+    //END packet//
 
     controlSize = buildControlPacket(C_END, fileSize, name, packet);
     if (controlSize < 0 || llSend(packet, controlSize) < 0)
@@ -153,12 +153,12 @@ static int sendFile(const char *filename)
 // Returns 0 on success or -1 on error.
 static int receiveFile(const char *filename)
 {
-    // TODO: receiver (partner's part)
+    //to do
     (void)filename;
     return -1;
 }
 
-//----------------------------------- MAIN ENTRY -----------------------------------------//
+//----------------------------------- MAIN -----------------------------------------//
 
 void applicationLayer(const char *serialPort, const char *role, int baudRate,
                       int nTries, int timeout, const char *filename)
