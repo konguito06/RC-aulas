@@ -86,7 +86,7 @@ typedef struct {
     unsigned char data[MAX_PAYLOAD_SIZE + 1]; // destuffed payload plus BCC2
     int len;                                  // bytes in data
     int escape;                               // previous byte was ESC
-    int badEscape;                            // ESC followed by something invalid
+    int corrupt;                              // bad escape or too long: reject it
 } IParser;
 
 //--------------------------------- SHARED HELPERS ----------------------------------------//
@@ -481,7 +481,7 @@ static void resetParser(IParser *p)
     p->state = I_START;
     p->len = 0;
     p->escape = 0;
-    p->badEscape = 0;
+    p->corrupt = 0;
 }
 
 // Feeds one byte to the I-frame parser. Returns 1 when a frame with a valid
@@ -510,7 +510,7 @@ static int parseIByte(IParser *p, unsigned char byte)
         {
             p->len = 0;
             p->escape = 0;
-            p->badEscape = 0;
+            p->corrupt = 0;
             p->state = I_DATA;
         }
         else if (byte == FLAG) p->state = I_FLAG;
@@ -523,31 +523,33 @@ static int parseIByte(IParser *p, unsigned char byte)
             // The frame ends here. This FLAG can also open the next one.
             int complete = (p->len >= 1); // at least BCC2
             if (p->escape)
-                p->badEscape = 1;         // ESC right before the FLAG
+                p->corrupt = 1;           // ESC right before the FLAG
             p->escape = 0;
             p->state = I_FLAG;
             return complete;
         }
 
-        if (p->len >= MAX_PAYLOAD_SIZE + 1)
-        {
-            // Too long: the closing FLAG was lost. Drop it and let the
-            // sender's timeout retransmit.
-            resetParser(p);
-            break;
-        }
-
         if (p->escape)
         {
             if (byte != ESC_FLAG && byte != ESC_ESC)
-                p->badEscape = 1;          // noise; the frame will be rejected
-            p->data[p->len++] = byte ^ 0x20; // undo stuffing
+                p->corrupt = 1;           // noise; the frame will be rejected
+            byte ^= 0x20;                 // undo stuffing
             p->escape = 0;
         }
         else if (byte == ESC)
-            p->escape = 1;                 // next byte is the stuffed one
-        else
+        {
+            p->escape = 1;                // next byte is the stuffed one
+            break;
+        }
+
+        // A full frame fills the buffer exactly, so noise that breaks an ESC
+        // pair (one byte becomes two) overflows it. Keep reading until the
+        // FLAG and reject the frame, instead of dropping it and waiting for
+        // the sender's timeout.
+        if (p->len < MAX_PAYLOAD_SIZE + 1)
             p->data[p->len++] = byte;
+        else
+            p->corrupt = 1;
         break;
     }
     return 0;
@@ -558,7 +560,7 @@ static int payloadOk(const IParser *p)
     unsigned char bcc2 = 0;
     for (int k = 0; k < p->len - 1; k++)
         bcc2 ^= p->data[k];             // XOR of the data only
-    return !p->badEscape && bcc2 == p->data[p->len - 1]; // last byte is BCC2
+    return !p->corrupt && bcc2 == p->data[p->len - 1]; // last byte is BCC2
 }
 
 // Answers a complete I-frame with RR or REJ.

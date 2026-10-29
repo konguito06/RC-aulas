@@ -157,34 +157,34 @@ static int parseControlPacket(const unsigned char *packet, int size, unsigned ch
 {
     if (size < 1 || packet[0] != expectedC)
         return -1;
- 
+
     int gotSize = 0;
     name[0] = '\0';
- 
+
     int i = 1;
     while (i < size)
     {
         if (i + 2 > size) // no room for T and L
             return -1;
- 
+
         unsigned char t = packet[i];
         unsigned char l = packet[i + 1];
         i += 2;
- 
+
         if (i + l > size) // V runs past the end of the packet
             return -1;
- 
+
         if (t == T_FILESIZE)
         {
             if (l < 1 || l > sizeof(long))
                 return -1;
             if (l == sizeof(long) && (packet[i] & 0x80)) // would overflow a long
                 return -1;
- 
+
             long value = 0;
             for (int k = 0; k < l; k++)
                 value = (value << 8) | packet[i + k];
- 
+
             *fileSize = value;
             gotSize = 1;
         }
@@ -194,10 +194,10 @@ static int parseControlPacket(const unsigned char *packet, int size, unsigned ch
             name[l] = '\0';
         }
         // Unknown TLVs are skipped
- 
+
         i += l;
     }
- 
+
     return gotSize ? 0 : -1;
 }
 
@@ -210,9 +210,9 @@ static int receiveFile(const char *filename)
     long fileSize = 0, endSize = 0;
     char sentName[256], endName[256];
     FILE *file = NULL;
- 
+
     //START packet//
- 
+
     int n = llReceive(packet);
     if (n < 0)
     {
@@ -225,16 +225,16 @@ static int receiveFile(const char *filename)
         return -1;
     }
     printf("Receiving \"%s\" (%ld bytes), saving as \"%s\"\n", sentName, fileSize, filename);
- 
+
     file = fopen(filename, "wb");
     if (file == NULL)
     {
         perror("fopen");
         return -1;
     }
- 
+
     //Data packets//
- 
+
     long bytesReceived = 0;
     while (1)
     {
@@ -250,24 +250,24 @@ static int receiveFile(const char *filename)
             printf("Empty packet received\n");
             goto fail;
         }
- 
+
         if (packet[0] == C_END)
             break;
- 
+
         if (packet[0] != C_DATA)
         {
             printf("Unexpected packet type %d\n", packet[0]);
             goto fail;
         }
- 
+
         if (n < DATA_HEADER_SIZE)
         {
             printf("Data packet too short\n");
             goto fail;
         }
- 
+
         int dataSize = 256 * packet[1] + packet[2];
-        if (dataSize != n - DATA_HEADER_SIZE || dataSize > DATA_CHUNK_SIZE)
+        if (dataSize != n - DATA_HEADER_SIZE)
         {
             printf("Data packet size mismatch (header says %d, got %d)\n",
                    dataSize, n - DATA_HEADER_SIZE);
@@ -278,19 +278,19 @@ static int receiveFile(const char *filename)
             printf("Received more data than announced in START packet\n");
             goto fail;
         }
- 
+
         if (fwrite(&packet[DATA_HEADER_SIZE], 1, dataSize, file) != (size_t)dataSize)
         {
             perror("fwrite");
             goto fail;
         }
- 
+
         bytesReceived += dataSize;
         printf("Received %ld / %ld bytes\n", bytesReceived, fileSize);
     }
- 
+
     //END packet//
- 
+
     if (parseControlPacket(packet, n, C_END, &endSize, endName) < 0)
     {
         printf("Invalid END packet\n");
@@ -306,16 +306,16 @@ static int receiveFile(const char *filename)
         printf("Incomplete file (received %ld of %ld bytes)\n", bytesReceived, fileSize);
         goto fail;
     }
- 
+
     if (fclose(file) != 0)
     {
         perror("fclose");
         remove(filename);
         return -1;
     }
- 
+
     return 0;
- 
+
 fail:
     fclose(file);
     remove(filename); // don't leave a partial file that looks valid
