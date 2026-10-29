@@ -87,7 +87,7 @@ static int sendFile(const char *filename)
 
     unsigned char packet[MAX_PAYLOAD_SIZE];
 
-    //------------------------- START packet -------------------------//
+    //START packet//
 
     int controlSize = buildControlPacket(C_START, fileSize, name, packet);
     if (controlSize < 0)
@@ -103,7 +103,7 @@ static int sendFile(const char *filename)
         return -1;
     }
 
-    //------------------------- Data packets -------------------------//
+    //Data packets//
 
     long bytesSent = 0;
     int nRead;
@@ -134,7 +134,7 @@ static int sendFile(const char *filename)
 
     fclose(file);
 
-    //-------------------------- END packet --------------------------//
+    //END packet//
 
     controlSize = buildControlPacket(C_END, fileSize, name, packet);
     if (controlSize < 0 || llSend(packet, controlSize) < 0)
@@ -211,7 +211,7 @@ static int receiveFile(const char *filename)
     char sentName[256], endName[256];
     FILE *file = NULL;
  
-    //------------------------- START packet -------------------------//
+    //START packet//
  
     int n = llReceive(packet);
     if (n < 0)
@@ -233,7 +233,7 @@ static int receiveFile(const char *filename)
         return -1;
     }
  
-    //------------------------- Data packets -------------------------//
+    //Data packets//
  
     long bytesReceived = 0;
     while (1)
@@ -289,7 +289,7 @@ static int receiveFile(const char *filename)
         printf("Received %ld / %ld bytes\n", bytesReceived, fileSize);
     }
  
-    //-------------------------- END packet --------------------------//
+    //END packet//
  
     if (parseControlPacket(packet, n, C_END, &endSize, endName) < 0)
     {
@@ -322,7 +322,7 @@ fail:
     return -1;
 }
 
-//----------------------------------- MAIN ENTRY -----------------------------------------//
+//----------------------------------- MAIN -----------------------------------------//
 
 void applicationLayer(const char *serialPort, const char *role, int baudRate,
                       int nTries, int timeout, const char *filename)
