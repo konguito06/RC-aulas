@@ -53,7 +53,7 @@ static struct
     struct timespec start, end; // from connection established to close requested
     long framesSent;            // tx: I-frames acknowledged with RR
     long retransmissions;       // tx: I-frames written again
-    long timeouts;              // tx: waits for RR/REJ that timed out
+    long timeouts;              // waits for a reply (UA, RR/REJ, DISC) that timed out
     long rejReceived;           // tx: REJs received
     long framesReceived;        // rx: new I-frames delivered to the application
     long duplicates;            // rx: repeated I-frames acknowledged again
@@ -201,6 +201,18 @@ static int sendSupervisionFrame(unsigned char a, unsigned char c)
     return writeFrame(f, 5);
 }
 
+// Called after a timeout (the alarm handler already did alarmCount++).
+static void reportTimeout(const char *waitingFor, const char *resending)
+{
+    stats.timeouts++;
+    if (alarmCount <= savedRetransmissions)
+        printf("Timeout waiting for %s, resending %s (attempt %d/%d)\n",
+               waitingFor, resending, (int)alarmCount + 1, savedRetransmissions + 1);
+    else
+        printf("Timeout waiting for %s, giving up after %d attempts\n",
+               waitingFor, savedRetransmissions + 1);
+}
+
 static void printStats(int isTx)
 {
     double secs = (stats.end.tv_sec - stats.start.tv_sec) +
@@ -286,6 +298,8 @@ int llOpenTx(LinkLayer llParameters)
             alarmEnabled = 0;
             uaReceived = 1;
         }
+        else
+            reportTimeout("UA", "SET");
     }
 
     if (!uaReceived)
@@ -462,12 +476,10 @@ int llSend(const unsigned char *buf, int bufSize)
             alarm(0);
             alarmEnabled = 0;
             stats.rejReceived++;
+            printf("REJ received, resending I-frame\n");
         }
         else
-        {
-            // Timeout. The alarm handler already did alarmCount++
-            stats.timeouts++;
-        }
+            reportTimeout("RR", "I-frame");
     }
 
     free(frame);
@@ -574,6 +586,7 @@ static int answerIFrame(const IParser *p)
     {
         // It is a duplicate; resend RR in case the last one was lost.
         stats.duplicates++;
+        printf("Duplicate I-frame received, resending RR\n");
         return sendSupervisionFrame(A_TX, expectedNs ? C_RR1 : C_RR0) < 0 ? -1 : 0;
     }
 
@@ -581,6 +594,7 @@ static int answerIFrame(const IParser *p)
     {
         // Bad payload checksum: ask the sender to retry it.
         stats.rejSent++;
+        printf("Corrupted I-frame received, sending REJ\n");
         return sendSupervisionFrame(A_TX, expectedNs ? C_REJ1 : C_REJ0) < 0 ? -1 : 0;
     }
 
@@ -683,6 +697,8 @@ static int closeTx(void)
             alarmEnabled = 0;
             discReceived = 1;
         }
+        else
+            reportTimeout("DISC", "DISC");
     }
 
     if (!discReceived)
@@ -778,7 +794,8 @@ static int closeRx(void)
             alarm(0);
             alarmEnabled = 0;
         }
-        // else: timeout. The alarm handler already did alarmCount++
+        else
+            reportTimeout("UA", "DISC");
     }
 
     if (!uaReceived)
