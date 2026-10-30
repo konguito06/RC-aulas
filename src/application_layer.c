@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
-//------------------------------- PACKET CONSTANTS ---------------------------------------//
+//---------------------------------- PACKET CONSTANTS ----------------------------------//
 // Shared by transmitter and receiver - both sides must agree on these.
 //
 // Control packet (START / END):  [C][T0][L0][V0...][T1][L1][V1...]
@@ -24,7 +24,7 @@
 #define DATA_HEADER_SIZE 3                              // C, L2, L1
 #define DATA_CHUNK_SIZE (MAX_PAYLOAD_SIZE - DATA_HEADER_SIZE)
 
-//---------------------------------- TRANSMITTER -----------------------------------------//
+//------------------------------------ TRANSMITTER -------------------------------------//
 
 // Builds a START/END control packet: C, then TLVs for file size and file name.
 // Returns the packet size, or -1 if it doesn't fit in MAX_PAYLOAD_SIZE.
@@ -146,7 +146,7 @@ static int sendFile(const char *filename)
     return 0;
 }
 
-//------------------------------------ RECEIVER ------------------------------------------//
+//-------------------------------------- RECEIVER --------------------------------------//
 
 // Parses a START/END control packet whose first byte must be expectedC.
 // Extracts the file size (T_FILESIZE) and the file name (T_FILENAME).
@@ -322,8 +322,9 @@ fail:
     return -1;
 }
 
-//----------------------------------- MAIN -----------------------------------------//
+//---------------------------------------- MAIN ----------------------------------------//
 
+// Opens the link, sends (tx) or receives (rx) the file, then closes the link
 void applicationLayer(const char *serialPort, const char *role, int baudRate,
                       int nTries, int timeout, const char *filename)
 {

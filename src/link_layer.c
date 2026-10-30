@@ -14,20 +14,24 @@
 #include "link_layer.h"
 #include "serial_port.h"
 
-//------------------------------- PROTOCOL CONSTANTS -------------------------------------//
+//--------------------------------- PROTOCOL CONSTANTS ---------------------------------//
 
+// Frame delimiter and byte stuffing
 #define FLAG 0x7E
 #define ESC 0x7D
 #define ESC_FLAG 0x5E // FLAG ^ 0x20
 #define ESC_ESC 0x5D  // ESC ^ 0x20
 
-#define A_TX 0x03
-#define A_RX 0x01
+// Address field
+#define A_TX 0x03 // commands from tx, answers from rx
+#define A_RX 0x01 // commands from rx, answers from tx
 
+// Control field: supervision frames
 #define C_SET 0x03
 #define C_UA 0x07
 #define C_DISC 0x0B
 
+// Control field: information frames and their answers
 #define C_I0 0x00
 #define C_I1 0x80
 #define C_RR0 0xAA
@@ -35,18 +39,18 @@
 #define C_REJ0 0x54
 #define C_REJ1 0x55
 
-//------------------------------------ GLOBAL STATE ---------------------------------------//
+//------------------------------------ GLOBAL STATE ------------------------------------//
 
 static int Ns = 0;          // bit number for the next frame we send
 static int expectedNs = 0;  // bit number for the next frame we want
-static int savedTimeout = 0;
-static int savedRetransmissions = 0;
+static int savedTimeout = 0;         // from LinkLayer, saved in llOpen
+static int savedRetransmissions = 0; // from LinkLayer, saved in llOpen
 static int discPending = 0; // rx: llReceive already consumed the transmitter's DISC
 
-static volatile sig_atomic_t alarmEnabled = 0;
-static volatile sig_atomic_t alarmCount = 0;
+static volatile sig_atomic_t alarmEnabled = 0; // 1 while waiting for a reply
+static volatile sig_atomic_t alarmCount = 0;   // timeouts in the current wait
 
-//------------------------------------ STATISTICS -----------------------------------------//
+//------------------------------------- STATISTICS -------------------------------------//
 
 static struct
 {
@@ -61,8 +65,9 @@ static struct
     long bytes;                 // payload bytes sent (tx) or delivered (rx)
 } stats;
 
-//-------------------------------------- TYPES --------------------------------------------//
+//--------------------------------------- TYPES ----------------------------------------//
 
+// State machine for supervision frames (SET, UA, DISC, RR, REJ)
 typedef enum {
     START,
     FLAG_RCV,
@@ -72,6 +77,7 @@ typedef enum {
     STOP
 } State;
 
+// State machine for information frames
 typedef enum {
     I_START,   // waiting for the opening FLAG
     I_FLAG,    // got FLAG, expecting address
@@ -80,6 +86,7 @@ typedef enum {
     I_DATA     // header is valid, collecting data until the closing FLAG
 } IState;
 
+// Everything the receiver keeps while reading one information frame
 typedef struct {
     IState state;
     unsigned char c;                          // control byte (I0 or I1)
@@ -89,8 +96,9 @@ typedef struct {
     int corrupt;                              // bad escape or too long: reject it
 } IParser;
 
-//--------------------------------- SHARED HELPERS ----------------------------------------//
+//----------------------------------- SHARED HELPERS -----------------------------------//
 
+// SIGALRM: ends the current wait and counts one timeout
 static void alarmHandler(int signal)
 {
     (void)signal;
@@ -112,6 +120,7 @@ static int installAlarmHandler(void)
     return 0;
 }
 
+// Resets the link state and statistics at the start of llOpen
 static void initLink(LinkLayer llParameters)
 {
     savedTimeout = llParameters.timeout;
@@ -132,10 +141,11 @@ static int readByte(unsigned char *byte)
     return res;
 }
 
+// Feeds one byte to the supervision-frame state machine.
+// Reaches STOP when FLAG expectedA expectedC BCC1 FLAG has been read.
 static void updateState(State *state, unsigned char byte,
                         unsigned char expectedA, unsigned char expectedC)
 {
-    // Check each header byte in order, then wait for the closing flag.
     switch (*state)
     {
     case START:
@@ -180,9 +190,9 @@ static void updateState(State *state, unsigned char byte,
     }
 }
 
+// Writes the whole frame, even if the port accepts it in several pieces
 static int writeFrame(const unsigned char *frame, int frameSize)
 {
-    // Keep writing until the whole frame is out.
     int written = 0;
     while (written < frameSize)
     {
@@ -194,14 +204,14 @@ static int writeFrame(const unsigned char *frame, int frameSize)
     return 0;
 }
 
+// Sends a supervision frame: FLAG A C BCC1 FLAG (no data)
 static int sendSupervisionFrame(unsigned char a, unsigned char c)
 {
-    // Supervisory frames have no data, just the header and flags.
     unsigned char f[5] = {FLAG, a, c, a ^ c, FLAG};
     return writeFrame(f, 5);
 }
 
-// Called after a timeout (the alarm handler already did alarmCount++).
+// Counts and prints a timeout (the alarm handler already did alarmCount++)
 static void reportTimeout(const char *waitingFor, const char *resending)
 {
     stats.timeouts++;
@@ -213,6 +223,7 @@ static void reportTimeout(const char *waitingFor, const char *resending)
                waitingFor, savedRetransmissions + 1);
 }
 
+// Prints the statistics table (called by llCloseTx / llCloseRx)
 static void printStats(int isTx)
 {
     double secs = (stats.end.tv_sec - stats.start.tv_sec) +
@@ -240,8 +251,9 @@ static void printStats(int isTx)
     printf("------------------------------------------------\n");
 }
 
-//------------------------------------ LINK OPEN ------------------------------------------//
+//------------------------------------- LINK OPEN --------------------------------------//
 
+// Transmitter: opens the port, sends SET and waits for UA (with retries)
 int llOpenTx(LinkLayer llParameters)
 {
     if (openSerialPort(llParameters.serialPort, llParameters.baudRate) < 0)
@@ -258,7 +270,6 @@ int llOpenTx(LinkLayer llParameters)
         return -1;
     }
 
-    // SET starts the connection; keep retrying until UA arrives.
     alarmCount = 0;
     alarmEnabled = 0;
     int uaReceived = 0;
@@ -313,6 +324,7 @@ int llOpenTx(LinkLayer llParameters)
     return 0;
 }
 
+// Receiver: opens the port, waits for SET and answers with UA
 int llOpenRx(LinkLayer llParameters)
 {
     if (openSerialPort(llParameters.serialPort, llParameters.baudRate) < 0)
@@ -333,7 +345,6 @@ int llOpenRx(LinkLayer llParameters)
     State state = START;
     unsigned char byte;
 
-    // Wait for SET before replying with UA.
     while (state != STOP)
     {
         int res = readByte(&byte);
@@ -357,11 +368,12 @@ int llOpenRx(LinkLayer llParameters)
     return 0;
 }
 
-//------------------------------------ LINK SEND ------------------------------------------//
+//------------------------------------- LINK SEND --------------------------------------//
 
+// Byte stuffing: FLAG and ESC are escaped so they can't look like a frame boundary.
+// Writes b to out and returns how many bytes were written (1 or 2).
 static int stuffByte(unsigned char b, unsigned char *out)
 {
-    // Escape FLAG and ESC so they can't look like frame boundaries.
     if (b == FLAG)
     {
         out[0] = ESC;
@@ -378,13 +390,13 @@ static int stuffByte(unsigned char b, unsigned char *out)
     return 1;
 }
 
-// Build an information frame and wait for its RR/REJ response.
+// Sends buf in one I-frame and waits for RR (resends on REJ or timeout)
 int llSend(const unsigned char *buf, int bufSize)
 {
     if (buf == NULL || bufSize < 0 || bufSize > MAX_PAYLOAD_SIZE)
         return -1;
 
-    int maxSize = 2*(bufSize + 1) + 5;
+    int maxSize = 2*(bufSize + 1) + 5; // worst case: data + BCC2 all stuffed, plus header and flags
     unsigned char *frame = malloc(maxSize);
 
     if (frame == NULL)
@@ -393,7 +405,7 @@ int llSend(const unsigned char *buf, int bufSize)
         return -1;
     }
 
-    //-------------------- Build the information frame --------------------//
+    //Build the I-frame: FLAG A C BCC1 [stuffed data + BCC2] FLAG//
 
     int frameSize = 0;
 
@@ -415,7 +427,7 @@ int llSend(const unsigned char *buf, int bufSize)
     frameSize += stuffByte(bcc2, &frame[frameSize]); // BCC2 is stuffed too
     frame[frameSize++] = FLAG;
 
-    //-------------------- Send and wait for RR/REJ -----------------------//
+    //Send and wait for RR/REJ//
 
     int result = -1;
     int accepted = 0;
@@ -433,7 +445,6 @@ int llSend(const unsigned char *buf, int bufSize)
             return -1;
         }
 
-        // Retry if the timer expires or the receiver asks for a resend.
         alarmEnabled = 1;
         alarm(savedTimeout);
 
@@ -486,8 +497,9 @@ int llSend(const unsigned char *buf, int bufSize)
     return result;
 }
 
-//----------------------------------- LINK RECEIVE ----------------------------------------//
+//------------------------------------ LINK RECEIVE ------------------------------------//
 
+// Starts the I-frame parser from scratch
 static void resetParser(IParser *p)
 {
     p->state = I_START;
@@ -567,6 +579,7 @@ static int parseIByte(IParser *p, unsigned char byte)
     return 0;
 }
 
+// True if the frame had no stuffing errors and its BCC2 is correct
 static int payloadOk(const IParser *p)
 {
     unsigned char bcc2 = 0;
@@ -603,6 +616,8 @@ static int answerIFrame(const IParser *p)
     return sendSupervisionFrame(A_TX, expectedNs ? C_RR1 : C_RR0) < 0 ? -1 : 1;
 }
 
+// Waits for the next new I-frame and copies its data into packet.
+// Returns the data size, or -1 on error or if the transmitter sent DISC.
 int llReceive(unsigned char *packet)
 {
     if (packet == NULL)
@@ -619,10 +634,10 @@ int llReceive(unsigned char *packet)
         if (res < 0) return -1;
         if (res == 0) continue;
 
-        // Supervision frames can't appear inside a stuffed I-frame, so it is
-        // safe to look for them on every byte.
+        // Every byte also goes to the SET and DISC detectors (safe: FLAG never
+        // appears inside a stuffed I-frame).
 
-        // A retransmitted SET means the UA from llOpenRx was lost.
+        // A repeated SET means our UA from llOpenRx was lost: answer it again.
         updateState(&setState, byte, A_TX, C_SET);
         if (setState == STOP)
         {
@@ -657,8 +672,9 @@ int llReceive(unsigned char *packet)
     }
 }
 
-//------------------------------------ LINK CLOSE -----------------------------------------//
+//------------------------------------- LINK CLOSE -------------------------------------//
 
+// Transmitter disconnect: send DISC, wait for DISC, send UA
 static int closeTx(void)
 {
     alarmCount = 0;
@@ -667,7 +683,6 @@ static int closeTx(void)
 
     while ((alarmCount <= savedRetransmissions) && !discReceived)
     {
-        // Start disconnect; wait for the receiver's DISC.
         if (sendSupervisionFrame(A_TX, C_DISC) < 0)
             return -1;
 
@@ -711,6 +726,7 @@ static int closeTx(void)
     return sendSupervisionFrame(A_RX, C_UA);
 }
 
+// Closes the link, prints the statistics and closes the port
 int llCloseTx()
 {
     clock_gettime(CLOCK_MONOTONIC, &stats.end);
@@ -720,15 +736,16 @@ int llCloseTx()
     return result;
 }
 
+// Receiver disconnect: wait for DISC, send DISC, wait for UA
 static int closeRx(void)
 {
     IParser parser;
     resetParser(&parser);
     unsigned char byte;
 
-    // Wait for the transmitter's DISC, unless llReceive already got it.
-    // If the RR for the last I-frame was lost, the transmitter is still
-    // repeating that frame, so keep acknowledging it meanwhile.
+    //Wait for DISC//
+    // (skipped if llReceive already got it). If our last RR was lost, the
+    // transmitter is still repeating its last I-frame, so keep answering it.
     State discState = discPending ? STOP : START;
     discPending = 0;
 
@@ -750,8 +767,8 @@ static int closeRx(void)
         }
     }
 
-    // Reply with DISC and wait for the final UA. Resend our DISC if the UA
-    // doesn't arrive in time, or right away if the transmitter repeats its
+    //Send DISC and wait for UA//
+    // Resend DISC on timeout, or right away if the transmitter repeats its
     // DISC (ours was lost).
     alarmCount = 0;
     alarmEnabled = 0;
@@ -807,6 +824,7 @@ static int closeRx(void)
     return 0;
 }
 
+// Closes the link, prints the statistics and closes the port
 int llCloseRx()
 {
     clock_gettime(CLOCK_MONOTONIC, &stats.end);
