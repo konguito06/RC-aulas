@@ -8,12 +8,12 @@ Submission limits (from "Lab 1 - Efficiency Report Guidelines"):
 
 # Lab 1 – Characterisation of the Data-Link Protocol Efficiency
 
-**Authors:** `<Luís Kong> (up202409115)`, `<André Pereira> (up202405143)` — Class `<3LEIC15>`
+**Authors:** `Luís Kong (up202409115)`, `André Pereira (up202405143)` — Class `3LEIC15`
 **Course:** Redes de Computadores (RC), L.EIC – FEUP, 2026/2027
 
 ## Summary
 
-We implemented a Stop-and-Wait ARQ data-link protocol and used it to transfer files over an RS-232 serial link. We measured its efficiency S while varying four parameters one at a time: the frame error rate (FER), the propagation delay (T<sub>prop</sub>), the baud rate (C) and the frame size (L). With the default parameters (C = 9600 bit/s, no errors, no delay), the measured efficiency is `<S₀>`. The measurements `<agree / disagree>` with the theoretical model S = (1 − FER)/(1 + 2a), with the largest deviation at `<condition>`.
+We implemented a Stop-and-Wait ARQ data-link protocol and used it to transfer files over an RS-232 serial link. We measured its efficiency S while varying four parameters one at a time: the frame error rate (FER), the propagation delay (T<sub>prop</sub>), the baud rate (C) and the frame size (L). With the default parameters (C = 9600 bit/s, no errors, no delay), the measured efficiency is `S₀`. The measurements `agree / disagree` with the theoretical model S = (1 − FER)/(1 + 2a), with the largest deviation at `condition`.
 
 ## Introduction
 
