@@ -28,7 +28,7 @@ The first lab implements reliable file transfer between two computers over an RS
 
 Three rules of our protocol shape its efficiency. The receiver answers a correct information (I) frame with RR and a frame with a bad BCC2 with REJ, which the transmitter answers at once by resending the frame. A frame with a bad header, or a lost reply, gets no answer, so the transmitter resends it only after a 4 s timeout, and gives up after 3 such retransmissions. Every frame waits for its reply before the next is sent.
 
-This report evaluates the efficiency S = R/C, where R is the achieved bit rate, and compares it with the theoretical efficiency of Stop-and-Wait [1, slides 16, 34 and 36]:
+This report evaluates the efficiency S = R/C, where R is the achieved bit rate, and compares it with the theoretical efficiency of Stop-and-Wait:
 
 $$S = \frac{1 - \mathrm{FER}}{1 + 2a}, \quad a = \frac{T_{\mathrm{prop}}}{T_f}, \quad T_f = \frac{8L}{C}, \quad \mathrm{FER} \approx 1 - (1 - \mathrm{BER})^{8L}$$
 
@@ -94,12 +94,8 @@ Figure 1 shows the measured efficiency with both models, and Table 2 gives the d
 
 **Frame size.** Without errors, longer frames raise S from 0.710 at L = 125 to 0.779 at L = 1000, because overhead takes a smaller share, while Equation 1 gives S = 1 for every L. With T~prop~ = 100 ms the gain is larger, from 0.292 to 0.629, because a falls as L grows. With BER = 2.79·10^−5^ the order reverses: the measured FER rises from 0.054 to 0.254, and L = 125 reaches S = 0.668 against 0.546 at L = 1000. The best L therefore depends on the link: 1000 bytes on a link without errors, and the shortest tested frame at this BER.
 
-**Undetected errors.** Cable noise corrupted 9 of the 75 files received in the noisy FER runs, 5 of them at the highest BER; their time still counts in S. Replaying one showed two flipped bits in the same bit position of the same frame. BCC2 is a parity check per bit position, and parity misses any even number of errors [1, slide 20]. Injected REJs alter no data, and all 30 of those files arrived intact. The cable's noise generator is unseeded: repeating the FER sweep reproduced all 30 earlier runs exactly, and the three L = 1000 runs of the noisy L series repeat FER runs, which leaves 84 distinct noisy transfers.
+**Undetected errors.** Cable noise corrupted 9 of the 75 files received in the noisy FER runs, 5 of them at the highest BER; their time still counts in S. Replaying one showed two flipped bits in the same bit position of the same frame. BCC2 is a parity check per bit position, and parity misses any even number of errors. Injected REJs alter no data, and all 30 of those files arrived intact. The cable's noise generator is unseeded: repeating the FER sweep reproduced all 30 earlier runs exactly, and the three L = 1000 runs of the noisy L series repeat FER runs, which leaves 84 distinct noisy transfers.
 
 # Conclusions
 
 The measurements confirm the behaviour that Equation 1 describes: S falls linearly with FER and as 1/(1 + 2a) with delay. On this link the formula overestimates S by a factor of 1.28, and counting start and stop bits, frame overhead and replies (Equation 2) brings the mean error below 0.001 on error-free points and to 0.011 with injected errors. Among the parameters varied alone from the baseline, T~prop~ lowered S the most, to 0.355 at 500 ms. A timer that scales with the frame time would remove the loss at 2400 bit/s and below, and a CRC in place of the XOR would catch the errors that reached the file. These results describe the virtual cable, where errors are independent and the delay is exact.
-
-# References
-
-[1] M. P. Ricardo and R. Prior, "The Data Link Layer", Redes de Computadores lecture slides, Universidade do Porto, 2026/2027.
