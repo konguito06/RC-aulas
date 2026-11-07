@@ -62,11 +62,17 @@ models(b, [t * 1000 for t in curve], [A.s_corrected(9600, t, 1000) for t in curv
 measured(b, pts, [p["tprop"] * 1000 for p in pts], BLUE)
 b.set(title="(b) Propagation delay (C = 9600 bit/s)", xlabel="T$_{prop}$ (ms)", ylabel="Efficiency S")
 
-pts = sweep("FER")
 curve = [i / 100 for i in range(0, 61)]
 s0 = A.s_corrected(9600, 0, 1000)
-models(c, curve, [s0 * (1 - f) for f in curve], [1 - f for f in curve], BLUE)
-measured(c, pts, [p["fer"] for p in pts], BLUE, xerr=[p["fersd"] for p in pts])
+# Both series share the same model curves, so they are drawn in ink
+models(c, curve, [s0 * (1 - f) for f in curve], [1 - f for f in curve], INK)
+for name, color, marker in (("FER", BLUE, "o"), ("FER_INJ", ORANGE, "s")):
+    pts = sweep(name)
+    measured(c, pts, [p["fer"] for p in pts], color, marker, xerr=[p["fersd"] for p in pts])
+c.legend(handles=[
+    Line2D([], [], color=BLUE, marker="o", ms=5.5, mec="white", ls="none", label="Cable noise (15 runs)"),
+    Line2D([], [], color=ORANGE, marker="s", ms=5.5, mec="white", ls="none", label="Injected REJ (5 runs)"),
+], loc="lower left")
 c.set(title="(c) Frame error rate (C = 9600 bit/s, L = 1000)", xlabel="Measured FER", ylabel="Efficiency S")
 
 curve = [125, 150, 200, 250, 300, 400, 500, 600, 750, 1000]
@@ -75,9 +81,10 @@ models(d, curve, [A.s_corrected(9600, 0, L) for L in curve], [1] * len(curve), B
 models(d, curve, [A.s_corrected(9600, 0.1, L) for L in curve], [A.s_theory(0.1, 9600, L) for L in curve], ORANGE)
 fer = lambda L: 1 - (1 - ber) ** (8 * L)
 models(d, curve, [A.s_corrected(9600, 0, L, fer(L)) for L in curve], [1 - fer(L) for L in curve], AQUA)
-for name, color, marker in (("L_T0", BLUE, "o"), ("L_T100", ORANGE, "s"), ("L_BER", AQUA, "^")):
+# The BER points are shifted 6% right so they do not hide the other series at the same L
+for name, color, marker, shift in (("L_T0", BLUE, "o", 1), ("L_T100", ORANGE, "s", 1), ("L_BER", AQUA, "^", 1.06)):
     pts = sweep(name)
-    measured(d, pts, [p["L"] for p in pts], color, marker)
+    measured(d, pts, [p["L"] * shift for p in pts], color, marker)
 d.set_xscale("log")
 d.set_xticks([125, 250, 500, 1000])
 d.set_xticklabels(["125", "250", "500", "1000"])
@@ -104,9 +111,9 @@ fig.tight_layout(pad=0.4, h_pad=0.9, w_pad=1.1, rect=(0, 0, 1, 0.94))
 fig.savefig(os.path.join(HERE, "efficiency.svg"))
 
 print("sweep | mean abs diff theory | corrected | max corrected")
-for name in ("C", "Tprop", "L_T0", "L_T100", "FER", "L_BER"):
+for name in ("C", "Tprop", "L_T0", "L_T100", "FER", "FER_INJ", "L_BER"):
     pts = [p for p in sweep(name) if not (name == "C" and p["C"] <= 2400)]
-    measured_fer = lambda p: p["fer"] if p["ber"] else 0
+    measured_fer = lambda p: p["fer"] if p["sweep"] in ("FER", "FER_INJ", "L_BER") else 0
     e1 = [abs(p["S"] - A.s_theory(p["tprop"], p["C"], p["L"], measured_fer(p))) for p in pts]
     e2 = [abs(p["S"] - A.s_corrected(p["C"], p["tprop"], p["L"], measured_fer(p))) for p in pts]
     print(f"{name:7} {st.mean(e1):.3f} {st.mean(e2):.4f} {max(e2):.4f}")

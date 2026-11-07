@@ -33,7 +33,10 @@ def build_plan():
     for t in [0, 10, 50, 100, 200, 500]:
         plan.append(("Tprop", {**base, "tprop_ms": t}, 3))
     for fer in [0, 0.1, 0.2, 0.3, 0.4, 0.5]:
-        plan.append(("FER", {**base, "ber": ber_for_fer(fer, 1000), "target_fer": fer}, 5))
+        plan.append(("FER", {**base, "ber": ber_for_fer(fer, 1000), "target_fer": fer}, 15))
+    # Errors injected at the receiver on I frames (REJ only), as the course guidelines suggest
+    for fer in [0, 0.1, 0.2, 0.3, 0.4, 0.5]:
+        plan.append(("FER_INJ", {**base, "target_fer": fer, "inject": fer}, 5))
     for L in [125, 250, 500, 1000]:
         plan.append(("L_T0", {**base, "L": L}, 3))
     for L in [125, 250, 500, 1000]:
@@ -97,7 +100,8 @@ def stop(proc):
 
 
 def one_run(sweep, point, run, cfg):
-    binary = os.path.join(BUILD, f"main{cfg['L']}")
+    binary = os.path.join(BUILD, "maininject" if "inject" in cfg else f"main{cfg['L']}")
+    rx_env = {**os.environ, "INJECT_FER": str(cfg.get("inject", 0))}
     received = os.path.join(WORK, "received.gif")
     if os.path.exists(received):
         os.remove(received)
@@ -105,7 +109,7 @@ def one_run(sweep, point, run, cfg):
     rx_path, tx_path = os.path.join(LOGS, tag + "_rx.log"), os.path.join(LOGS, tag + "_tx.log")
     with open(rx_path, "w") as rx_log, open(tx_path, "w") as tx_log:
         rx = subprocess.Popen([binary, RX_PORT, str(cfg["C"]), "rx", received],
-                              stdout=rx_log, stderr=subprocess.STDOUT, cwd=WORK)
+                              stdout=rx_log, stderr=subprocess.STDOUT, cwd=WORK, env=rx_env)
         time.sleep(0.5)
         start = time.time()
         tx = subprocess.Popen([binary, TX_PORT, str(cfg["C"]), "tx", "penguin.gif"],
@@ -149,6 +153,7 @@ def one_run(sweep, point, run, cfg):
 
 def main():
     out_path = sys.argv[1]
+    # Optional: "smoke" for one baseline transfer, or a comma-separated list of sweeps to run
     only = sys.argv[2] if len(sys.argv) > 2 else None
     os.makedirs(LOGS, exist_ok=True)
     subprocess.run(["cp", SOURCE_FILE, os.path.join(WORK, "penguin.gif")], check=True)
@@ -165,11 +170,16 @@ def main():
 
     if only == "smoke":
         plan = [("smoke", dict(C=9600, tprop_ms=0, ber=0.0, L=1000, target_fer=""), 1)]
+    elif only:
+        plan = [step for step in build_plan() if step[0] in only.split(",")]
     else:
         plan = build_plan()
 
     counts = {}
-    for sweep, cfg, runs in plan:
+    for sweep, cfg, runs in build_plan() if only and only != "smoke" else plan:
+        if (sweep, cfg, runs) not in plan:
+            counts[sweep] = counts.get(sweep, 0) + 1
+            continue
         counts[sweep] = counts.get(sweep, 0) + 1
         point = counts[sweep]
         pending = [r for r in range(1, runs + 1) if (sweep, str(point), str(r)) not in done]
