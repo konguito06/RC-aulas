@@ -20,7 +20,7 @@ pandoc relatorio_Lab1.md -o Kong_Pereira_Lab1_Report.pdf --pdf-engine=typst --co
 
 # Summary
 
-We measured the efficiency S of our Stop-and-Wait ARQ data-link protocol in 108 file transfers over a virtual serial cable, varying the baud rate (C), the propagation delay (T~prop~), the frame error rate (FER) and the frame size (L) one at a time. With C = 9600 bit/s, no errors and no delay, S = 0.779. The theoretical formula S = (1 − FER)/(1 + 2a) predicts the trends with T~prop~ and FER but overestimates S by a factor of 1.28, because it ignores start and stop bits, frame overhead and reply frames. A corrected model that counts these bytes matches every error-free point above 2400 bit/s to within 0.001. Two effects fall outside both models: the fixed 4 s timer halves S at 2400 bit/s and below, and 4 of 34 distinct noisy transfers delivered a corrupted file that BCC2 did not detect.
+We measured the efficiency S of our Stop-and-Wait ARQ data-link protocol in 108 file transfers over a virtual serial cable, varying the baud rate (C), the propagation delay (T~prop~), the frame error rate (FER) and the frame size (L) one at a time. The error-free baseline at 9600 bit/s reaches S = 0.779. The theoretical formula S = (1 − FER)/(1 + 2a) predicts the trends but overestimates S by a factor of 1.28; a corrected model that counts start and stop bits, frame overhead and replies matches every error-free point above 2400 bit/s to within 0.001. Outside both models, the fixed 4 s timer halves S at 2400 bit/s and below, and BCC2 missed the errors in 4 of 34 distinct noisy transfers.
 
 # Introduction
 
@@ -57,15 +57,15 @@ where F is the file size in bytes. With noise, each REJ adds one frame cycle T~c
 
 Figure 1 shows the measured efficiency with both models, and Table 2 gives the differences. All 108 transfers reached the end of the file, and 103 delivered an identical copy.
 
-![Measured efficiency S against (a) C, (b) T~prop~, (c) measured FER and (d) L, with Equation 1 (theoretical) and Equation 2 (corrected). Error bars show the standard deviation of the repetitions. In (d), the corrected curves are drawn for BER = 0.](Lab1_report/efficiency.svg){width=100%}
+![Measured efficiency S against (a) C, (b) T~prop~, (c) measured FER and (d) L, with Equation 1 (theoretical) and Equation 2 (corrected). Colour marks the test condition; solid lines show Equation 2 and dashed lines Equation 1. Error bars show the standard deviation of the repetitions, and the shaded band in (a) marks the rates where a frame cycle exceeds the 4 s timer. In (d), the BER curves use the FER predicted by Equation 1.](Lab1_report/efficiency.svg){width=100%}
 
 : Mean absolute difference between measured S and each model. The C row excludes 1200 and 2400 bit/s.
 
 | Experiment | Equation 1 | Equation 2 |
 |:------------------|---:|---:|
-| C (T~prop~ = 0) | 0.221 | 0.0001 |
-| T~prop~ | 0.177 | 0.0000 |
-| L, T~prop~ = 0 / 100 ms | 0.248 / 0.112 | 0.0001 / 0.0000 |
+| C (T~prop~ = 0) | 0.221 | < 0.001 |
+| T~prop~ | 0.177 | < 0.001 |
+| L, T~prop~ = 0 / 100 ms | 0.248 / 0.112 | < 0.001 / < 0.001 |
 | FER (using measured FER) | 0.200 | 0.032 |
 | L, BER = 2.79·10^−5^ (using measured FER) | 0.259 | 0.045 |
 
@@ -75,18 +75,18 @@ Figure 1 shows the measured efficiency with both models, and Table 2 gives the d
 
 **Propagation delay.** S falls from 0.779 at T~prop~ = 0 to 0.629 at 100 ms and 0.355 at 500 ms (a = 0.6), because the transmitter stays idle for each round trip. Equation 1 follows this shape, staying 1.28 times above the measurements at every delay. Equation 2 matches all six points.
 
-**Frame error rate.** S falls roughly linearly with FER, from 0.779 to 0.383 at a measured FER of 0.452 (Table 3). The file needs only 14 frames, so the measured FER varies between runs, with a standard deviation of up to 0.13. Measured S lies 0.019 to 0.051 below Equation 2 for two reasons: long frames take nearly all the errors but the FER also counts the 3 short frames, and each timeout costs 4 s instead of a 1.06 s frame cycle. Counting REJs and timeouts directly reproduces T in all 37 noisy runs to within 0.16 s.
+**Frame error rate.** S falls roughly linearly with FER, from 0.779 to 0.383 at a measured FER of 0.452 (Table 3). The file needs only 14 frames, so the measured FER varies between runs, with a standard deviation of up to 0.13. Measured S lies 0.019 to 0.051 below Equation 2 because the FER counts all 14 frames, including 3 short ones that errors rarely hit, while almost every retransmission repeats a full 1.06 s frame cycle. Timeouts were rare, 0.2 per transfer at two points, but each costs 4 s. Counting REJs and timeouts directly reproduces T in all 37 noisy runs to within 0.16 s.
 
-: Efficiency against FER (5 runs per point; C = 9600 bit/s, T~prop~ = 0, L = 1000 bytes). Timeouts include those in the disconnection, which fall outside T.
+: Efficiency against FER (5 runs per point; C = 9600 bit/s, T~prop~ = 0, L = 1000 bytes). REJs and timeouts are means per transfer, counting only the data transfer.
 
-| BER | Measured FER | Retransmissions | Timeouts | T (s) | S (mean ± SD) | S~c~ | Corrupted files |
+| BER | Measured FER | REJs | Timeouts | T (s) | S (mean ± SD) | S~c~ | Corrupted files |
 |---:|---:|---:|---:|---:|---:|---:|---:|
 | 0 | 0 | 0 | 0 | 11.73 | 0.779 ± 0.000 | 0.779 | 0 |
-| 1.32·10^−5^ | 0.123 | 2.2 | 0.2 | 14.06 | 0.664 ± 0.101 | 0.683 | 0 |
-| 2.79·10^−5^ | 0.230 | 4.4 | 0.2 | 16.39 | 0.567 ± 0.079 | 0.600 | 1 |
-| 4.46·10^−5^ | 0.297 | 6.2 | 0.4 | 18.89 | 0.497 ± 0.097 | 0.548 | 1 |
-| 6.39·10^−5^ | 0.331 | 7.6 | 0.4 | 20.38 | 0.475 ± 0.121 | 0.521 | 1 |
-| 8.66·10^−5^ | 0.452 | 12.2 | 0.4 | 24.65 | 0.383 ± 0.081 | 0.427 | 1 |
+| 1.32·10^−5^ | 0.123 | 2.2 | 0 | 14.06 | 0.664 ± 0.101 | 0.683 | 0 |
+| 2.79·10^−5^ | 0.230 | 4.4 | 0 | 16.39 | 0.567 ± 0.079 | 0.600 | 1 |
+| 4.46·10^−5^ | 0.297 | 6.0 | 0.2 | 18.89 | 0.497 ± 0.097 | 0.548 | 1 |
+| 6.39·10^−5^ | 0.331 | 7.4 | 0.2 | 20.38 | 0.475 ± 0.121 | 0.521 | 1 |
+| 8.66·10^−5^ | 0.452 | 12.2 | 0 | 24.65 | 0.383 ± 0.081 | 0.427 | 1 |
 
 **Frame size.** Without errors, longer frames raise S from 0.710 at L = 125 to 0.779 at L = 1000, because overhead takes a smaller share; Equation 1 gives S = 1 for every L. With T~prop~ = 100 ms the effect is stronger, from 0.292 to 0.629, because a falls as L grows. With BER = 2.79·10^−5^ the order reverses: L = 125 reaches S = 0.668 ± 0.022 against 0.546 ± 0.084 at L = 1000, as the measured FER grows from 0.054 to 0.254. The best L therefore depends on the link: 1000 bytes without errors, with or without delay, and 125 bytes among those tested at this BER.
 
