@@ -60,7 +60,7 @@ where F is the file size in bytes. With noise, each REJ adds one frame cycle T~c
 
 Figure 1 shows the measured efficiency with both models, and Table 2 gives the differences. All 198 transfers reached the end of the file, and 188 delivered an identical copy.
 
-![Measured efficiency S against (a) C, (b) T~prop~, (c) measured FER and (d) L, with Equation 1 (theoretical) and Equation 2 (corrected). Colour marks the test condition; solid lines show Equation 2 and dashed lines Equation 1. Error bars show the standard deviation of the repetitions, and the shaded band in (a) marks the rates where a frame cycle exceeds the 4 s timer. In (c), both series share the black model curves; in (d), the BER curves use the FER predicted by Equation 1, and the BER points are shifted right by 6% for legibility.](Lab1_report/efficiency.svg){width=100%}
+![Measured efficiency S against (a) C, (b) T~prop~, (c) measured FER and (d) L, with Equation 1 (theoretical) and Equation 2 (corrected). Colour marks the test condition; solid lines show Equation 2 and dashed lines Equation 1. Error bars show the standard deviation of the repetitions, and the shaded band in (a) marks the rates where a frame cycle exceeds the 4 s timer. In (c), whose y-axis starts at 0.25, both series share the purple model curves; in (d), the BER curves use the FER predicted by Equation 1, and the BER points are shifted right by 6% for legibility.](Lab1_report/efficiency.svg){width=100%}
 
 : Mean absolute difference between measured S and each model. The C row excludes 1200 and 2400 bit/s.
 

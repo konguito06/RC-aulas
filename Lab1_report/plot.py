@@ -32,9 +32,16 @@ def models(ax, xs, corrected, theory, color):
     ax.plot(xs, corrected, color=color, lw=1.8, zorder=2)
 
 
-def measured(ax, pts, x, color, marker="o", xerr=None):
-    ax.errorbar(x, [p["S"] for p in pts], yerr=[p["Ssd"] for p in pts], xerr=xerr, fmt=marker, ms=6.5,
-                color=color, mec="white", mew=0.9, ecolor=color, elinewidth=0.9, capsize=2.5, zorder=3)
+def measured(ax, pts, x, color, marker="o", xerr=None, hollow=False, light=False):
+    # light: thin, uncapped error bars for crowded panels; hollow: open marker so overlaps stay visible
+    face = "white" if hollow else color
+    edge = color if hollow else "white"
+    bars = dict(elinewidth=0.7, capsize=0, alpha=0.5) if light else dict(elinewidth=0.9, capsize=2.5)
+    _, _, lines = ax.errorbar(x, [p["S"] for p in pts], yerr=[p["Ssd"] for p in pts], xerr=xerr, fmt=marker,
+                              ms=6.5, color=color, mfc=face, mec=edge, mew=1.2 if hollow else 0.9, ecolor=color,
+                              zorder=4 if hollow else 3, **{k: v for k, v in bars.items() if k != "alpha"})
+    for line in lines:
+        line.set_alpha(bars.get("alpha", 1))
 
 
 fig, axes = plt.subplots(2, 2, figsize=(6.7, 5.1))
@@ -64,15 +71,18 @@ b.set(title="(b) Propagation delay (C = 9600 bit/s)", xlabel="T$_{prop}$ (ms)", 
 
 curve = [i / 100 for i in range(0, 61)]
 s0 = A.s_corrected(9600, 0, 1000)
-# Both series share the same model curves, so they are drawn in ink
-models(c, curve, [s0 * (1 - f) for f in curve], [1 - f for f in curve], INK)
-for name, color, marker in (("FER", BLUE, "o"), ("FER_INJ", ORANGE, "s")):
+# Both series share the same model curves, so they get their own colour (purple: checked for colour-blind
+# separation from the blue and orange points)
+models(c, curve, [s0 * (1 - f) for f in curve], [1 - f for f in curve], "#7a3e9d")
+for name, color, marker, hollow in (("FER", BLUE, "o", False), ("FER_INJ", ORANGE, "s", True)):
     pts = sweep(name)
-    measured(c, pts, [p["fer"] for p in pts], color, marker, xerr=[p["fersd"] for p in pts])
+    measured(c, pts, [p["fer"] for p in pts], color, marker, xerr=[p["fersd"] for p in pts], hollow=hollow,
+             light=True)
 c.legend(handles=[
     Line2D([], [], color=BLUE, marker="o", ms=5.5, mec="white", ls="none", label="Cable noise (15 runs)"),
-    Line2D([], [], color=ORANGE, marker="s", ms=5.5, mec="white", ls="none", label="Injected REJ (5 runs)"),
-], loc="lower left")
+    Line2D([], [], color=ORANGE, marker="s", ms=5.5, mfc="white", mec=ORANGE, mew=1.2, ls="none",
+           label="Injected REJ (5 runs)"),
+], loc="upper right")
 c.set(title="(c) Frame error rate (C = 9600 bit/s, L = 1000)", xlabel="Measured FER", ylabel="Efficiency S")
 
 curve = [125, 150, 200, 250, 300, 400, 500, 600, 750, 1000]
@@ -99,6 +109,9 @@ d.legend(handles=[
 for ax in axes.flat:
     ax.set_ylim(0, 1.06)
     ax.set_yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0])
+# All FER points lie between 0.38 and 0.78, so (c) zooms in to spread them out
+c.set_ylim(0.25, 1.03)
+c.set_yticks([0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
 
 key = [
     Line2D([], [], color=INK, marker="o", ms=6, mec="white", ls="none", label="Measured (mean ± SD)"),
